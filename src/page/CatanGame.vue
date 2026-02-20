@@ -5,6 +5,7 @@ import { useRouter } from "vue-router";
 import HexBoard from "../components/catan/HexBoard.vue";
 import { useCatan, type ResourceType } from "../composables/useCatan";
 import { useCatanRoom } from "../composables/useCatanRoom";
+import gongSound from "../assets/se/gong.mp3";
 
 const router = useRouter();
 const {
@@ -91,8 +92,6 @@ const showLobby = ref(false);
 const playerName = ref("Player " + Math.floor(Math.random() * 1000));
 const inputRoomId = ref("");
 const connectionError = ref("");
-const showTurnNotification = ref(false);
-const turnNotificationMessage = ref("");
 const globalFeedbackMessage = ref("");
 
 // Multiplayer Integration
@@ -446,11 +445,11 @@ onMounted(() => {
 // UX Polish Watches
 watch(isUserTurn, (isTurn) => {
   if (isTurn && gameStarted.value && winnerId.value === null) {
-    turnNotificationMessage.value = "YOUR TURN";
-    showTurnNotification.value = true;
-    setTimeout(() => {
-      showTurnNotification.value = false;
-    }, 2500);
+    const audio = new Audio(gongSound);
+    audio.volume = 0.25;
+    audio
+      .play()
+      .catch((e) => console.warn("Audio play blocked by browser:", e));
   }
 });
 
@@ -604,16 +603,6 @@ watch(activeTradeRequest, (newReq, oldReq) => {
       <Transition name="fade-slide">
         <div v-if="globalFeedbackMessage" class="global-feedback-toast">
           {{ globalFeedbackMessage }}
-        </div>
-      </Transition>
-
-      <!-- Turn Notification Overlay -->
-      <Transition name="turn-alert">
-        <div v-if="showTurnNotification" class="turn-notification-overlay">
-          <div class="turn-alert-box">
-            <h1 class="turn-alert-text">{{ turnNotificationMessage }}</h1>
-            <div class="turn-alert-line"></div>
-          </div>
         </div>
       </Transition>
 
@@ -2821,41 +2810,6 @@ watch(activeTradeRequest, (newReq, oldReq) => {
   margin-right: 4px;
 }
 
-/* Turn Notification Overlay */
-.turn-notification-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: none;
-  background: rgba(0, 0, 0, 0.2);
-}
-
-.turn-alert-box {
-  text-align: center;
-}
-
-.turn-alert-text {
-  font-size: 5rem;
-  font-weight: 900;
-  color: #f1c40f;
-  text-shadow: 0 0 30px rgba(241, 196, 15, 0.5);
-  letter-spacing: 0.5rem;
-  margin: 0;
-}
-
-.turn-alert-line {
-  height: 4px;
-  background: linear-gradient(90deg, transparent, #f1c40f, transparent);
-  margin-top: 1rem;
-  width: 100%;
-}
-
 /* Feedback Toast */
 .global-feedback-toast {
   position: fixed;
@@ -2874,35 +2828,6 @@ watch(activeTradeRequest, (newReq, oldReq) => {
 }
 
 /* Transitions */
-.turn-alert-enter-active {
-  animation: turnAlertIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-.turn-alert-leave-active {
-  animation: turnAlertOut 0.5s cubic-bezier(0.6, -0.28, 0.735, 0.045);
-}
-
-@keyframes turnAlertIn {
-  0% {
-    transform: scale(0.5);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-@keyframes turnAlertOut {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(2);
-    opacity: 0;
-  }
-}
-
 .fade-slide-enter-active,
 .fade-slide-leave-active {
   transition: all 0.3s ease;
