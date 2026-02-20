@@ -1,4 +1,6 @@
-import { ref } from "vue";
+import { ref, computed, watch } from "vue";
+import { db } from "../lib/firebase";
+import { ref as dbRef, onValue, set } from "firebase/database";
 
 export type ResourceType =
   | "wood"
@@ -89,6 +91,15 @@ export interface Port {
   r: number;
 }
 
+export interface TradeRequest {
+  fromId: number;
+  toId: number | "any"; // "any" for bank or general offer
+  offer: Partial<Record<ResourceType, number>>;
+  request: Partial<Record<ResourceType, number>>;
+  status: "pending" | "accepted" | "rejected";
+  timestamp: number;
+}
+
 export type TurnPhase = "ready" | "rolled" | "robber" | "discarding";
 
 export function useCatan() {
@@ -110,6 +121,8 @@ export function useCatan() {
   const isContinuationMode = ref(false);
   const discardingPlayers = ref<number[]>([]);
   const roadBuildingMovesLeft = ref(0);
+  const isMultiplayer = ref(false);
+  const isInternalUpdate = ref(false);
   const awardHolders = ref<{
     longestRoad: { playerId: number | null; count: number };
     largestArmy: { playerId: number | null; count: number };
@@ -118,7 +131,14 @@ export function useCatan() {
     largestArmy: { playerId: null, count: 0 },
   });
 
+  const userPlayerId = ref(0);
+  const isUserTurn = computed(
+    () => currentPlayerId.value === userPlayerId.value && gameStarted.value,
+  );
   const logs = ref<ActionLogEntry[]>([]);
+  const activeTradeRequest = ref<TradeRequest | null>(null);
+  const isConnected = ref(true);
+  let stateRef: any = null;
 
   const ALL_PLAYERS: Player[] = [
     {
@@ -283,23 +303,66 @@ export function useCatan() {
       logs.value.shift();
     }
   };
+  const initGame = (playerCount: number, mpPlayers?: any[], myId?: number) => {
+    if (mpPlayers && myId !== undefined) {
+      isMultiplayer.value = true;
+      players.value = mpPlayers.map((p, index) => {
+        let persona: AIPersona = "BALANCE";
+        const isAI = p.name.startsWith("AI");
+        if (isAI) {
+          const aiPersonas: AIPersona[] = ["LAND", "CITY", "BALANCE"];
+          persona = aiPersonas[index % 3] || "BALANCE";
+        }
+        return {
+          id: p.id,
+          name: p.name,
+          color: p.color,
+          resources: {
+            wood: 0,
+            brick: 0,
+            wool: 0,
+            wheat: 0,
+            ore: 0,
+            desert: 0,
+          },
+          points: 0,
+          devCards: [],
+          armySize: 0,
+          persona,
+        };
+      });
+      userPlayerId.value = myId;
+      currentPlayerId.value = 0;
+      gameStarted.value = true;
+      setupPhase.value = "first";
+      setupStep.value = "settlement";
+      ports.value = [];
+      dice.value = [1, 1];
+      turnPhase.value = "ready";
+      winnerId.value = null;
+      isContinuationMode.value = false;
+      roadBuildingMovesLeft.value = 0;
+      turnCount.value = 1;
+      awardHolders.value = {
+        longestRoad: { playerId: null, count: 0 },
+        largestArmy: { playerId: null, count: 0 },
+      };
 
-  const initGame = (playerCount: number) => {
-    // Shuffled personas for AI players to ensure uniqueness
-    const aiPersonas: AIPersona[] = ["LAND", "CITY", "BALANCE"];
-    for (let i = aiPersonas.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const temp = aiPersonas[i]!;
-      aiPersonas[i] = aiPersonas[j]!;
-      aiPersonas[j] = temp;
+      // Host generates the board
+      if (myId === 0) {
+        generateBoard();
+        initDevCardDeck();
+      }
+      return;
     }
 
-    players.value = ALL_PLAYERS.slice(0, playerCount).map((p) => {
+    isMultiplayer.value = false;
+    // 1. Create temporary player array from ALL_PLAYERS
+    let initialPlayers = ALL_PLAYERS.slice(0, playerCount).map((p) => {
       let persona: AIPersona = "BALANCE";
-      if (p.id === 0) {
-        persona = "BALANCE";
-      } else {
-        // Assign from shuffled list (AI 1 gets index 0, AI 2 gets index 1, etc.)
+      if (p.id !== 0) {
+        // Shuffled personas for AI players to ensure uniqueness
+        const aiPersonas: AIPersona[] = ["LAND", "CITY", "BALANCE"];
         persona = aiPersonas[p.id - 1] || "BALANCE";
       }
 
@@ -319,6 +382,24 @@ export function useCatan() {
         persona,
       };
     });
+
+    // 2. Shuffle the players
+    for (let i = initialPlayers.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [initialPlayers[i], initialPlayers[j]] = [
+        initialPlayers[j]!,
+        initialPlayers[i]!,
+      ];
+    }
+
+    // 3. Re-assign IDs based on new order and identify userPlayerId
+    players.value = initialPlayers.map((p, index) => {
+      if (p.name === "You") {
+        userPlayerId.value = index;
+      }
+      return { ...p, id: index };
+    });
+
     currentPlayerId.value = 0;
     gameStarted.value = true;
     setupPhase.value = "first";
@@ -336,6 +417,141 @@ export function useCatan() {
     };
     generateBoard();
     initDevCardDeck();
+  };
+
+  const syncGameState = (roomId: string) => {
+    stateRef = dbRef(db, `catan/rooms/${roomId}/gameState`);
+
+    // Listen for remote updates
+    onValue(stateRef, (snapshot) => {
+      const remoteState = snapshot.val();
+      if (remoteState && !isInternalUpdate.value) {
+        isInternalUpdate.value = true;
+        // Apply remote state
+        hexes.value = remoteState.hexes || [];
+        nodes.value = remoteState.nodes || {};
+        edges.value = remoteState.edges || {};
+        ports.value = remoteState.ports || [];
+        players.value = remoteState.players || [];
+        devCardDeck.value = remoteState.devCardDeck || [];
+        awardHolders.value = remoteState.awardHolders || {
+          longestRoad: { playerId: null, count: 0 },
+          largestArmy: { playerId: null, count: 0 },
+        };
+        logs.value = remoteState.logs || [];
+        discardingPlayers.value = remoteState.discardingPlayers || [];
+        roadBuildingMovesLeft.value = remoteState.roadBuildingMovesLeft ?? 0;
+        isContinuationMode.value = remoteState.isContinuationMode ?? false;
+        activeTradeRequest.value = remoteState.activeTradeRequest || null;
+
+        currentPlayerId.value = remoteState.turn?.currentPlayerId ?? 0;
+        turnPhase.value = remoteState.turn?.turnPhase || "ready";
+        dice.value = remoteState.turn?.dice || [1, 1];
+        setupPhase.value = remoteState.turn?.setupPhase || "none";
+        setupStep.value = remoteState.turn?.setupStep || "settlement";
+        turnCount.value = remoteState.turn?.turnCount ?? 1;
+
+        gameStarted.value = remoteState.gameStarted ?? false;
+        winnerId.value = remoteState.winnerId ?? null;
+
+        setTimeout(() => {
+          isInternalUpdate.value = false;
+        }, 100);
+      } else {
+        isInternalUpdate.value = false;
+      }
+    });
+
+    // Monitor connection
+    const connectedRef = dbRef(db, ".info/connected");
+    onValue(connectedRef, (snap) => {
+      isConnected.value = snap.val() === true;
+    });
+  };
+  // Watch for local updates and push to firebase
+  watch(
+    [
+      hexes,
+      nodes,
+      edges,
+      currentPlayerId,
+      turnPhase,
+      dice,
+      setupPhase,
+      setupStep,
+      gameStarted,
+      winnerId,
+      players,
+      devCardDeck,
+      awardHolders,
+      logs,
+      discardingPlayers,
+      roadBuildingMovesLeft,
+      isContinuationMode,
+      activeTradeRequest,
+    ],
+    () => {
+      if (isMultiplayer.value && !isInternalUpdate.value) {
+        isInternalUpdate.value = true;
+        set(stateRef, {
+          hexes: hexes.value,
+          nodes: nodes.value,
+          edges: edges.value,
+          ports: ports.value,
+          players: players.value,
+          devCardDeck: devCardDeck.value,
+          awardHolders: awardHolders.value,
+          logs: logs.value,
+          discardingPlayers: discardingPlayers.value,
+          roadBuildingMovesLeft: roadBuildingMovesLeft.value,
+          isContinuationMode: isContinuationMode.value,
+          activeTradeRequest: activeTradeRequest.value,
+          turn: {
+            currentPlayerId: currentPlayerId.value,
+            turnPhase: turnPhase.value,
+            dice: dice.value,
+            setupPhase: setupPhase.value,
+            setupStep: setupStep.value,
+            turnCount: turnCount.value,
+          },
+          gameStarted: gameStarted.value,
+          winnerId: winnerId.value,
+          timestamp: Date.now(),
+        }).catch(console.error);
+      }
+    },
+    { deep: true },
+  );
+
+  const forceSync = () => {
+    isInternalUpdate.value = false;
+    if (isMultiplayer.value && stateRef) {
+      set(stateRef, {
+        hexes: hexes.value,
+        nodes: nodes.value,
+        edges: edges.value,
+        ports: ports.value,
+        players: players.value,
+        devCardDeck: devCardDeck.value,
+        awardHolders: awardHolders.value,
+        logs: logs.value,
+        discardingPlayers: discardingPlayers.value,
+        roadBuildingMovesLeft: roadBuildingMovesLeft.value,
+        isContinuationMode: isContinuationMode.value,
+        activeTradeRequest: activeTradeRequest.value,
+        turn: {
+          currentPlayerId: currentPlayerId.value,
+          turnPhase: turnPhase.value,
+          dice: dice.value,
+          setupPhase: setupPhase.value,
+          setupStep: setupStep.value,
+          turnCount: turnCount.value,
+        },
+        gameStarted: gameStarted.value,
+        winnerId: winnerId.value,
+        timestamp: Date.now(),
+      }).catch(console.error);
+    }
   };
 
   const continueGame = () => {
@@ -920,6 +1136,7 @@ export function useCatan() {
         }
       }
     }
+    updateAwards();
   };
 
   const moveRobber = (hexId: number, playerId: number) => {
@@ -964,7 +1181,11 @@ export function useCatan() {
           ] as ResourceType;
           victim.resources[stolenRes]--;
           thief.resources[stolenRes]++;
-          // console.log(`Player ${playerId} stole ${stolenRes} from Player ${victimId}`)
+          addLog(
+            playerId,
+            "robber",
+            `🦹 ${thief.name} stole a resource from ${victim.name}`,
+          );
         }
       }
     }
@@ -1081,7 +1302,8 @@ export function useCatan() {
   };
 
   const aiPlayTurn = async () => {
-    if (currentPlayerId.value === 0 || winnerId.value !== null) return;
+    if (currentPlayerId.value === userPlayerId.value || winnerId.value !== null)
+      return;
 
     if (setupPhase.value !== "none") {
       const p = players.value[currentPlayerId.value];
@@ -1925,7 +2147,11 @@ export function useCatan() {
     edges,
     players,
     currentPlayerId,
+    userPlayerId,
+    isUserTurn,
+    isMultiplayer,
     dice,
+
     gameStarted,
     turnPhase,
     setupPhase,
@@ -1934,6 +2160,7 @@ export function useCatan() {
     devCardDeck,
     turnCount,
     initGame,
+    syncGameState,
     generateBoard,
     rollDice,
     nextTurn,
@@ -1961,5 +2188,9 @@ export function useCatan() {
     getIntersectionScore,
     logs,
     addLog,
+    activeTradeRequest,
+    forceSync,
+    isInternalUpdate,
+    isConnected,
   };
 }

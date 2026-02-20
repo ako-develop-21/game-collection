@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref, watch, computed } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+
 import { useRouter } from "vue-router";
-import { useCatan, type ResourceType } from "../composables/useCatan";
 import HexBoard from "../components/catan/HexBoard.vue";
+import { useCatan, type ResourceType } from "../composables/useCatan";
+import { useCatanRoom } from "../composables/useCatanRoom";
 
 const router = useRouter();
 const {
@@ -12,6 +14,8 @@ const {
   players,
   dice,
   currentPlayerId,
+  userPlayerId,
+  isUserTurn,
   gameStarted,
   turnPhase,
   winnerId,
@@ -43,12 +47,16 @@ const {
   calculateTotalPoints,
   calculatePublicPoints,
   logs,
-  addLog,
+  syncGameState,
+  activeTradeRequest,
+  forceSync,
+  isInternalUpdate,
+  isConnected,
 } = useCatan();
 
 const buildMode = ref<"road" | "settlement" | "city" | "trade" | null>(null);
+
 const currentPlayer = computed(() => players.value[currentPlayerId.value]);
-const isUserTurn = computed(() => currentPlayerId.value === 0);
 
 const modalType = ref<"monopoly" | "year_of_plenty" | "trade" | null>(null);
 const selectedResources = ref<ResourceType[]>([]);
@@ -61,6 +69,76 @@ const buyRes = ref<ResourceType | null>(null);
 const tradeTargetId = ref<number | null>(null);
 const offer = ref<Partial<Record<ResourceType, number>>>({});
 const request = ref<Partial<Record<ResourceType, number>>>({});
+
+// Multiplayer State
+const {
+  roomId,
+  roomPlayers,
+  isHost,
+  myPlayerIdInRoom,
+  gameStartedInRoom,
+  aiCountInRoom,
+  createRoom,
+  joinRoom,
+  leaveRoom,
+  startGameInRoom,
+  addAI,
+  removeAI,
+} = useCatanRoom();
+
+const isMultiplayerMode = ref(false);
+const showLobby = ref(false);
+const playerName = ref("Player " + Math.floor(Math.random() * 1000));
+const inputRoomId = ref("");
+const connectionError = ref("");
+const showTurnNotification = ref(false);
+const turnNotificationMessage = ref("");
+const globalFeedbackMessage = ref("");
+
+// Multiplayer Integration
+watch(gameStartedInRoom, (started) => {
+  if (started && !gameStarted.value) {
+    const totalCount = roomPlayers.value.length + aiCountInRoom.value;
+    const allPlayersInRoom = [...roomPlayers.value];
+
+    // Add AI placeholders
+    for (let i = 0; i < aiCountInRoom.value; i++) {
+      const aiId = roomPlayers.value.length + i;
+      allPlayersInRoom.push({
+        id: aiId,
+        name: `AI ${i + 1}`,
+        color: ["#3498db", "#2ecc71", "#f1c40f", "#9b59b6"][aiId] || "#9b59b6",
+        isHost: false,
+        isReady: true,
+        joinedAt: Date.now(),
+      });
+    }
+
+    initGame(totalCount, allPlayersInRoom, myPlayerIdInRoom.value!);
+    syncGameState(roomId.value!);
+  }
+});
+
+const handleCreateMultiplayer = async () => {
+  try {
+    await createRoom(playerName.value);
+    isMultiplayerMode.value = true;
+    showLobby.value = true;
+  } catch (e: any) {
+    connectionError.value = e.message;
+  }
+};
+
+const handleJoinMultiplayer = async () => {
+  if (!inputRoomId.value) return;
+  try {
+    await joinRoom(inputRoomId.value.toUpperCase(), playerName.value);
+    isMultiplayerMode.value = true;
+    showLobby.value = true;
+  } catch (e: any) {
+    connectionError.value = e.message;
+  }
+};
 
 // Action Log Filter
 const logFilter = ref<"all" | "dice" | number>("all");
@@ -82,13 +160,15 @@ const showDiscardModal = computed(() => {
       discardingPlayers.value,
   );
   return (
-    turnPhase.value === "discarding" && discardingPlayers.value.includes(0)
+    turnPhase.value === "discarding" &&
+    discardingPlayers.value.includes(userPlayerId.value)
   );
 });
 
 const totalHeld = computed(() => {
-  if (!players.value[0]) return 0;
-  return Object.values(players.value[0].resources).reduce((a, b) => a + b, 0);
+  const user = players.value[userPlayerId.value];
+  if (!user) return 0;
+  return Object.values(user.resources).reduce((a, b) => a + b, 0);
 });
 
 const isRoadBuildingMode = computed(() => roadBuildingMovesLeft.value > 0);
@@ -115,12 +195,14 @@ const openResourceModal = (type: "monopoly" | "year_of_plenty") => {
 
 const selectResource = (res: ResourceType) => {
   if (modalType.value === "monopoly") {
-    playDevelopmentCard(0, pendingCardIndex.value, { resource: res });
+    playDevelopmentCard(userPlayerId.value, pendingCardIndex.value, {
+      resource: res,
+    });
     modalType.value = null;
   } else if (modalType.value === "year_of_plenty") {
     selectedResources.value.push(res);
     if (selectedResources.value.length === 2) {
-      playDevelopmentCard(0, pendingCardIndex.value, {
+      playDevelopmentCard(userPlayerId.value, pendingCardIndex.value, {
         resources: selectedResources.value,
       });
       modalType.value = null;
@@ -140,7 +222,7 @@ const openTradeModal = () => {
 
 const handleBankTrade = () => {
   if (sellRes.value && buyRes.value) {
-    if (executeBankTrade(0, sellRes.value, buyRes.value)) {
+    if (executeBankTrade(userPlayerId.value, sellRes.value, buyRes.value)) {
       modalType.value = null;
     } else {
       tradeMessage.value = "Insufficient resources or invalid ratio.";
@@ -150,16 +232,59 @@ const handleBankTrade = () => {
 
 const handlePlayerTrade = () => {
   if (tradeTargetId.value !== null) {
-    if (
-      evaluatePlayerTrade(0, tradeTargetId.value, offer.value, request.value)
-    ) {
-      executePlayerTrade(0, tradeTargetId.value, offer.value, request.value);
-      tradeMessage.value = "Trade Accepted!";
-      setTimeout(() => (modalType.value = null), 1000);
+    const targetPlayer = players.value.find(
+      (p) => p.id === tradeTargetId.value,
+    );
+    const isHuman = targetPlayer && !targetPlayer.name.startsWith("AI");
+
+    if (isHuman) {
+      activeTradeRequest.value = {
+        fromId: userPlayerId.value,
+        toId: tradeTargetId.value,
+        offer: { ...offer.value },
+        request: { ...request.value },
+        status: "pending",
+        timestamp: Date.now(),
+      } as any;
+      tradeMessage.value = "Request sent to " + targetPlayer!.name;
     } else {
-      tradeMessage.value = "AI rejected the trade.";
+      if (
+        evaluatePlayerTrade(
+          userPlayerId.value,
+          tradeTargetId.value,
+          offer.value,
+          request.value,
+        )
+      ) {
+        executePlayerTrade(
+          userPlayerId.value,
+          tradeTargetId.value,
+          offer.value,
+          request.value,
+        );
+        tradeMessage.value = "Trade Accepted!";
+        setTimeout(() => (modalType.value = null), 1000);
+      } else {
+        tradeMessage.value = "AI rejected the trade.";
+      }
     }
   }
+};
+
+const handleAcceptTrade = () => {
+  if (activeTradeRequest.value) {
+    executePlayerTrade(
+      activeTradeRequest.value.fromId,
+      activeTradeRequest.value.toId as number,
+      activeTradeRequest.value.offer,
+      activeTradeRequest.value.request,
+    );
+    activeTradeRequest.value = null;
+  }
+};
+
+const handleRejectTrade = () => {
+  activeTradeRequest.value = null;
 };
 
 const updateTradeValue = (
@@ -173,7 +298,7 @@ const updateTradeValue = (
 };
 
 const handlePlayCard = (index: number) => {
-  const player = players.value[0];
+  const player = players.value[userPlayerId.value];
   if (!player) return;
   const card = player.devCards[index];
   if (
@@ -189,13 +314,13 @@ const handlePlayCard = (index: number) => {
     pendingCardIndex.value = index;
     openResourceModal(card.type);
   } else {
-    playDevelopmentCard(0, index);
+    playDevelopmentCard(userPlayerId.value, index);
   }
 };
 
 const updateDiscard = (res: ResourceType, delta: number) => {
   const current = resourcesToDiscard.value[res] || 0;
-  const playerRes = players.value[0]?.resources[res] || 0;
+  const playerRes = players.value[userPlayerId.value]?.resources[res] || 0;
   const newVal = Math.max(0, Math.min(playerRes, current + delta));
   resourcesToDiscard.value = {
     ...resourcesToDiscard.value,
@@ -205,7 +330,7 @@ const updateDiscard = (res: ResourceType, delta: number) => {
 
 const handleDiscard = () => {
   if (totalDiscardSelected.value === requiredDiscardCount.value) {
-    discardResources(0, resourcesToDiscard.value);
+    discardResources(userPlayerId.value, resourcesToDiscard.value);
     resourcesToDiscard.value = {};
   }
 };
@@ -230,11 +355,12 @@ const resourceEmoji: Record<string, string> = {
   desert: "🌵",
 };
 
-const personaNames: Record<string, string> = {
-  LAND: "拡大型",
-  CITY: "都市型",
-  BALANCE: "期待値型",
-};
+// TODO:AIモードの時は personaNames を小さく表示する
+// const personaNames: Record<string, string> = {
+//   LAND: "拡大型",
+//   CITY: "都市型",
+//   BALANCE: "期待値型",
+// };
 
 const handleNodeClick = (nodeId: string) => {
   if (!isUserTurn.value || winnerId.value !== null) return;
@@ -287,19 +413,55 @@ const handleHexClick = (hexId: number) => {
 };
 
 watch(currentPlayerId, (newId) => {
-  if (newId !== 0 && gameStarted.value && winnerId.value === null) {
+  // Only the host (or local player in solo) should trigger AI moves
+  const shouldTriggerAi = !isMultiplayerMode.value || isHost.value;
+
+  if (
+    newId !== userPlayerId.value &&
+    gameStarted.value &&
+    winnerId.value === null &&
+    shouldTriggerAi
+  ) {
     aiPlayTurn();
   }
 });
 
 watch([gameStarted, setupPhase], ([started, phase]) => {
-  if (started && phase !== "none" && !isUserTurn.value) {
+  const shouldTriggerAi = !isMultiplayerMode.value || isHost.value;
+  if (started && phase !== "none" && !isUserTurn.value && shouldTriggerAi) {
     aiPlayTurn();
   }
 });
 
 onMounted(() => {
-  // Game init happens via UI overlay
+  // Check for room ID in URL
+  const params = new URLSearchParams(window.location.search);
+  const room = params.get("room");
+  if (room) {
+    inputRoomId.value = room.toUpperCase();
+    handleJoinMultiplayer();
+  }
+});
+
+// UX Polish Watches
+watch(isUserTurn, (isTurn) => {
+  if (isTurn && gameStarted.value && winnerId.value === null) {
+    turnNotificationMessage.value = "YOUR TURN";
+    showTurnNotification.value = true;
+    setTimeout(() => {
+      showTurnNotification.value = false;
+    }, 2500);
+  }
+});
+
+watch(activeTradeRequest, (newReq, oldReq) => {
+  if (oldReq && !newReq && oldReq.status === "pending") {
+    // If it was our request and now it's gone, it was rejected or cancelled
+    if (oldReq.fromId === userPlayerId.value) {
+      globalFeedbackMessage.value = "Trade rejected or cancelled";
+      setTimeout(() => (globalFeedbackMessage.value = ""), 3000);
+    }
+  }
 });
 </script>
 
@@ -325,8 +487,135 @@ onMounted(() => {
               <span class="btn-sub">Full Classic</span>
             </button>
           </div>
+          <div class="setup-divider">OR</div>
+          <div class="mp-setup">
+            <input
+              v-model="playerName"
+              placeholder="Your Name"
+              class="mp-input"
+            />
+            <div class="mp-actions">
+              <button class="setup-btn mp-btn" @click="handleCreateMultiplayer">
+                <span class="btn-main">Create Room</span>
+              </button>
+              <div class="join-area">
+                <input
+                  v-model="inputRoomId"
+                  placeholder="Room ID"
+                  class="mp-input join-input"
+                  @keyup.enter="handleJoinMultiplayer"
+                />
+                <button class="setup-btn mp-btn" @click="handleJoinMultiplayer">
+                  <span class="btn-main">Join</span>
+                </button>
+              </div>
+            </div>
+            <p v-if="connectionError" class="error-msg">
+              {{ connectionError }}
+            </p>
+          </div>
         </div>
       </div>
+
+      <!-- Lobby Overlay -->
+      <div v-if="showLobby" class="setup-overlay">
+        <div class="setup-card lobby-card">
+          <h1 class="setup-title">LOBBY: {{ roomId }}</h1>
+          <div class="player-list">
+            <div
+              v-for="p in roomPlayers"
+              :key="'human-' + p.id"
+              class="lobby-player"
+            >
+              <span
+                class="player-color-dot"
+                :style="{ backgroundColor: p.color }"
+              ></span>
+              <span class="player-name"
+                >{{ p.name }} {{ p.isHost ? "(Host)" : "" }}</span
+              >
+              <span v-if="p.id === myPlayerIdInRoom" class="you-badge"
+                >YOU</span
+              >
+            </div>
+            <div
+              v-for="i in aiCountInRoom"
+              :key="'ai-' + i"
+              class="lobby-player ai-player"
+            >
+              <span
+                class="player-color-dot"
+                :style="{
+                  backgroundColor:
+                    ['#3498db', '#2ecc71', '#f1c40f', '#9b59b6'][
+                      roomPlayers.length + i - 1
+                    ] || '#9b59b6',
+                }"
+              ></span>
+              <span class="player-name">AI {{ i }}</span>
+              <button v-if="isHost" class="ai-remove-btn" @click="removeAI">
+                ×
+              </button>
+            </div>
+            <div
+              v-if="isHost && roomPlayers.length + aiCountInRoom < 4"
+              class="lobby-player add-ai-slot"
+            >
+              <button class="add-ai-btn" @click="addAI">+ Add AI Player</button>
+            </div>
+            <div
+              v-for="i in 4 - roomPlayers.length - aiCountInRoom"
+              :key="'empty-' + i"
+              class="lobby-player empty"
+            >
+              <span class="player-color-dot empty"></span>
+              <span class="player-name">Waiting...</span>
+            </div>
+          </div>
+          <div class="lobby-actions">
+            <button
+              class="setup-btn"
+              @click="
+                leaveRoom();
+                showLobby = false;
+              "
+            >
+              <span class="btn-main">Leave</span>
+            </button>
+            <button
+              v-if="isHost"
+              class="setup-btn primary"
+              :disabled="roomPlayers.length < 2"
+              @click="startGameInRoom()"
+            >
+              <span class="btn-main">Start Game</span>
+              <span v-if="roomPlayers.length < 2" class="btn-sub"
+                >Min 2 humans required</span
+              >
+              <span v-else class="btn-sub"
+                >With {{ roomPlayers.length + aiCountInRoom }} players</span
+              >
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Global Feedback Toast -->
+      <Transition name="fade-slide">
+        <div v-if="globalFeedbackMessage" class="global-feedback-toast">
+          {{ globalFeedbackMessage }}
+        </div>
+      </Transition>
+
+      <!-- Turn Notification Overlay -->
+      <Transition name="turn-alert">
+        <div v-if="showTurnNotification" class="turn-notification-overlay">
+          <div class="turn-alert-box">
+            <h1 class="turn-alert-text">{{ turnNotificationMessage }}</h1>
+            <div class="turn-alert-line"></div>
+          </div>
+        </div>
+      </Transition>
 
       <div v-if="winnerId !== null" class="setup-overlay victory">
         <div class="setup-card">
@@ -371,6 +660,24 @@ onMounted(() => {
               title="Reset Game"
             >
               🔄 RESET
+            </button>
+            <div
+              v-if="isMultiplayerMode"
+              class="connection-status"
+              :class="{ offline: !isConnected }"
+            >
+              <span class="status-dot"></span>
+              {{ isConnected ? "ONLINE" : "OFFLINE" }}
+            </div>
+
+            <button
+              v-if="isMultiplayerMode"
+              class="reset-mini-btn sync-btn"
+              @click="forceSync"
+              title="Force Sync State"
+            >
+              📡 SYNC
+              <span v-if="isInternalUpdate" class="sync-pulse-dot"></span>
             </button>
           </div>
 
@@ -580,13 +887,13 @@ onMounted(() => {
                       <span
                         class="player-points"
                         :title="
-                          p.id === 0 || winnerId !== null
+                          p.id === userPlayerId || winnerId !== null
                             ? 'Total Points: ' + calculateTotalPoints(p.id)
                             : 'Public Points'
                         "
                       >
                         {{
-                          p.id === 0 || winnerId !== null
+                          p.id === userPlayerId || winnerId !== null
                             ? calculateTotalPoints(p.id)
                             : calculatePublicPoints(p.id)
                         }}
@@ -596,7 +903,7 @@ onMounted(() => {
                   </div>
 
                   <!-- Resources -->
-                  <div v-if="p.id === 0" class="resources-grid">
+                  <div v-if="p.id === userPlayerId" class="resources-grid">
                     <template v-for="(val, res) in p.resources" :key="res">
                       <div
                         v-if="res !== 'desert'"
@@ -654,7 +961,7 @@ onMounted(() => {
                   <!-- My Unplayed Cards (User only) - Inside card for 4th player space -->
                   <div
                     v-if="
-                      p.id === 0 &&
+                      p.id === userPlayerId &&
                       p.devCards.filter((c) => !c.played && c.type !== 'vp')
                         .length > 0
                     "
@@ -715,6 +1022,11 @@ onMounted(() => {
                   class="log-entry"
                   :class="log.type"
                 >
+                  <span
+                    v-if="log.playerId !== null"
+                    class="log-color-dot"
+                    :style="{ backgroundColor: players[log.playerId]?.color }"
+                  ></span>
                   <span class="log-turn">T{{ log.turn }}</span>
                   <span class="log-msg">{{ log.message }}</span>
                 </div>
@@ -768,7 +1080,7 @@ onMounted(() => {
                   <span class="val-mini"
                     >{{ resourcesToDiscard[res] || 0
                     }}<span class="max-part"
-                      >/{{ players[0]?.resources[res] }}</span
+                      >/{{ players[userPlayerId]?.resources[res] }}</span
                     ></span
                   >
                   <button
@@ -776,7 +1088,7 @@ onMounted(() => {
                     @click="updateDiscard(res, 1)"
                     :disabled="
                       (resourcesToDiscard[res] || 0) >=
-                      (players[0]?.resources[res] || 0)
+                      (players[userPlayerId]?.resources[res] || 0)
                     "
                   >
                     +
@@ -818,7 +1130,9 @@ onMounted(() => {
               <div v-if="tradeMode === 'bank'" class="bank-trade-ui">
                 <div class="trade-section">
                   <p>
-                    SELL ({{ sellRes ? getTradeRatio(0, sellRes) : "?" }}:1)
+                    SELL ({{
+                      sellRes ? getTradeRatio(userPlayerId, sellRes) : "?"
+                    }}:1)
                   </p>
                   <div class="resource-select-mini">
                     <button
@@ -833,8 +1147,8 @@ onMounted(() => {
                       :class="{
                         selected: sellRes === res,
                         disabled:
-                          (players[0]?.resources?.[res] ?? 0) <
-                          getTradeRatio(0, res),
+                          (players[userPlayerId]?.resources?.[res] ?? 0) <
+                          getTradeRatio(userPlayerId, res),
                       }"
                       @click="sellRes = res"
                     >
@@ -879,7 +1193,7 @@ onMounted(() => {
                   <p>TRADE WITH:</p>
                   <div class="ai-targets">
                     <button
-                      v-for="p in players.filter((p) => p.id !== 0)"
+                      v-for="p in players.filter((p) => p.id !== userPlayerId)"
                       :key="p.id"
                       :class="{
                         selected: tradeTargetId === p.id,
@@ -990,6 +1304,77 @@ onMounted(() => {
               CANCEL
             </button>
           </div>
+        </div>
+      </div>
+      <!-- end game-content -->
+      <!-- Trade Request Overlay -->
+
+      <div
+        v-if="
+          activeTradeRequest &&
+          activeTradeRequest.status === 'pending' &&
+          (activeTradeRequest.toId === userPlayerId ||
+            activeTradeRequest.fromId === userPlayerId)
+        "
+        class="setup-overlay"
+      >
+        <div class="setup-card trade-offer-modal">
+          <template v-if="activeTradeRequest.toId === userPlayerId">
+            <h2 class="setup-title">TRADE OFFER</h2>
+            <p class="setup-subtitle">
+              {{ players[activeTradeRequest.fromId]?.name }} wants to trade
+            </p>
+            <div class="trade-visual-comparison">
+              <div class="trade-give">
+                <p>YOU GET</p>
+                <div class="trade-res-list">
+                  <template
+                    v-for="(val, res) in activeTradeRequest.offer"
+                    :key="res"
+                  >
+                    <span v-if="(val || 0) > 0" class="trade-badge"
+                      >{{ resourceEmoji[res] }} x{{ val }}</span
+                    >
+                  </template>
+                </div>
+              </div>
+              <div class="trade-dir">🔃</div>
+              <div class="trade-receive">
+                <p>YOU GIVE</p>
+                <div class="trade-res-list">
+                  <template
+                    v-for="(val, res) in activeTradeRequest.request"
+                    :key="res"
+                  >
+                    <span v-if="(val || 0) > 0" class="trade-badge"
+                      >{{ resourceEmoji[res] }} x{{ val }}</span
+                    >
+                  </template>
+                </div>
+              </div>
+            </div>
+            <div class="trade-actions-row">
+              <button class="setup-btn highlight" @click="handleAcceptTrade">
+                <span class="btn-main">ACCEPT</span>
+              </button>
+              <button class="setup-btn" @click="handleRejectTrade">
+                <span class="btn-main">REJECT</span>
+              </button>
+            </div>
+          </template>
+          <template v-else>
+            <h2 class="setup-title">OFFERING...</h2>
+            <p class="setup-subtitle">
+              Waiting for {{ players[activeTradeRequest.toId as number]?.name }}
+            </p>
+
+            <div class="loading-bar-container">
+              <div class="loading-bar-fill"></div>
+            </div>
+            <button class="setup-btn" @click="handleRejectTrade">
+              <span class="btn-main">CANCEL OFFER</span>
+            </button>
+          </template>
         </div>
       </div>
     </div>
@@ -2225,6 +2610,520 @@ onMounted(() => {
   .btn-sub {
     font-size: 0.8rem;
     color: #888;
+  }
+}
+
+/* Multiplayer Styles */
+.setup-divider {
+  margin: 1.5rem 0;
+  display: flex;
+  align-items: center;
+  color: #666;
+  font-size: 0.8rem;
+  font-weight: bold;
+  &::before,
+  &::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.1);
+    margin: 0 1rem;
+  }
+}
+
+.mp-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.mp-input {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.8rem 1rem;
+  border-radius: 10px;
+  color: white;
+  width: 100%;
+  text-align: center;
+  font-size: 1rem;
+  &:focus {
+    outline: none;
+    border-color: #4a90e2;
+  }
+}
+
+.mp-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.join-area {
+  display: flex;
+  gap: 0.5rem;
+  .join-input {
+    flex: 1;
+    font-family: monospace;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+}
+
+.mp-btn {
+  padding: 0.8rem 1rem;
+  .btn-main {
+    font-size: 1rem;
+  }
+}
+
+.error-msg {
+  color: #e74c3c;
+  font-size: 0.8rem;
+  margin-top: 0.5rem;
+}
+
+.lobby-card {
+  min-width: 400px;
+}
+
+.player-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  margin: 2rem 0;
+}
+
+.lobby-player {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  &.empty {
+    opacity: 0.5;
+    border-style: dashed;
+  }
+}
+
+.player-color-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  &.empty {
+    background: #333;
+  }
+}
+
+.player-name {
+  font-weight: bold;
+  flex: 1;
+  text-align: left;
+}
+
+.you-badge {
+  font-size: 0.6rem;
+  background: #2ecc71;
+  color: #1a1a2e;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 900;
+}
+
+.lobby-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  .setup-btn {
+    flex: 1;
+    &.primary {
+      background: #f1c40f;
+      border-color: #f1c40f;
+      .btn-main {
+        color: #1a1a2e;
+      }
+    }
+  }
+}
+
+.ai-player {
+  background: rgba(52, 152, 219, 0.1);
+  border-color: rgba(52, 152, 219, 0.2);
+}
+
+.ai-remove-btn {
+  background: transparent;
+  border: none;
+  color: #e74c3c;
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0 0.5rem;
+  line-height: 1;
+  &:hover {
+    transform: scale(1.2);
+  }
+}
+
+.add-ai-slot {
+  border-style: dashed;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.add-ai-btn {
+  background: transparent;
+  border: none;
+  color: #4a90e2;
+  font-weight: bold;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+  &:hover {
+    background: rgba(46, 204, 113, 0.2);
+    transform: scale(1.05);
+  }
+}
+
+.sync-pulse-dot {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 10px;
+  height: 10px;
+  background: #2ecc71;
+  border-radius: 50%;
+  box-shadow: 0 0 10px #2ecc71;
+  animation: syncPulse 1.5s infinite;
+}
+
+@keyframes syncPulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.5);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Log Improvements */
+.log-color-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+/* Turn Notification Overlay */
+.turn-notification-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.turn-alert-box {
+  text-align: center;
+}
+
+.turn-alert-text {
+  font-size: 5rem;
+  font-weight: 900;
+  color: #f1c40f;
+  text-shadow: 0 0 30px rgba(241, 196, 15, 0.5);
+  letter-spacing: 0.5rem;
+  margin: 0;
+}
+
+.turn-alert-line {
+  height: 4px;
+  background: linear-gradient(90deg, transparent, #f1c40f, transparent);
+  margin-top: 1rem;
+  width: 100%;
+}
+
+/* Feedback Toast */
+.global-feedback-toast {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(10px);
+  padding: 0.8rem 1.5rem;
+  border-radius: 50px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: white;
+  font-weight: bold;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+/* Transitions */
+.turn-alert-enter-active {
+  animation: turnAlertIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.turn-alert-leave-active {
+  animation: turnAlertOut 0.5s cubic-bezier(0.6, -0.28, 0.735, 0.045);
+}
+
+@keyframes turnAlertIn {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes turnAlertOut {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: all 0.3s ease;
+}
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translate(-50%, 20px);
+}
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -20px);
+}
+
+/* Trade Offer Modal Styles */
+.trade-offer-modal {
+  max-width: 500px;
+  border-color: #f1c40f !important;
+  background: linear-gradient(135deg, #1a1a2e, #16213e) !important;
+}
+
+.trade-visual-comparison {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2rem;
+  margin: 2rem 0;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 1.5rem;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.trade-give,
+.trade-receive {
+  flex: 1;
+  p {
+    font-size: 0.7rem;
+    color: #888;
+    font-weight: bold;
+    margin-bottom: 0.8rem;
+    text-transform: uppercase;
+  }
+}
+
+.trade-res-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.trade-badge {
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.4rem 0.8rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: bold;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  white-space: nowrap;
+}
+
+.trade-dir {
+  font-size: 1.5rem;
+  color: #f1c40f;
+  animation: pulse 2s infinite;
+}
+
+.trade-actions-row {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  .setup-btn {
+    flex: 1;
+  }
+}
+
+.loading-bar-container {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 2px;
+  margin-bottom: 2rem;
+  overflow: hidden;
+}
+
+.loading-bar-fill {
+  height: 100%;
+  background: #f1c40f;
+  width: 30%;
+  border-radius: 2px;
+  animation: loadingSlide 2s infinite ease-in-out;
+}
+
+@keyframes loadingSlide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(330%);
+  }
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Connection Status Indicator */
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(46, 204, 113, 0.1);
+  padding: 4px 10px;
+  border-radius: 50px;
+  border: 1px solid rgba(46, 204, 113, 0.2);
+  color: #2ecc71;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  margin-left: 8px;
+  transition: all 0.3s ease;
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    background: #2ecc71;
+    border-radius: 50%;
+    box-shadow: 0 0 8px #2ecc71;
+    animation: pulse-green 2s infinite;
+  }
+
+  &.offline {
+    background: rgba(231, 76, 60, 0.1);
+    border-color: rgba(231, 76, 60, 0.2);
+    color: #e74c3c;
+
+    .status-dot {
+      background: #e74c3c;
+      box-shadow: 0 0 8px #e74c3c;
+      animation: pulse-red 2s infinite;
+    }
+  }
+}
+
+.sync-pulse-dot {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  background: #3498db;
+  border-radius: 50%;
+  border: 2px solid #1a1a2e;
+  animation: sync-pulse 1s infinite;
+}
+
+@keyframes pulse-green {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes pulse-red {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes sync-pulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(52, 152, 219, 0.7);
+  }
+  70% {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 10px rgba(52, 152, 219, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(52, 152, 219, 0);
+  }
+}
+
+.sync-btn {
+  position: relative;
+  background: rgba(52, 152, 219, 0.1);
+  border-color: rgba(52, 152, 219, 0.2);
+  color: #3498db;
+
+  &:hover {
+    background: rgba(52, 152, 219, 0.2);
+    border-color: #3498db;
   }
 }
 </style>
