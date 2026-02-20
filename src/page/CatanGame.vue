@@ -6,42 +6,44 @@ import HexBoard from "../components/catan/HexBoard.vue";
 
 const router = useRouter();
 const {
-    hexes,
-    nodes,
-    edges,
-    players,
-    dice,
-    currentPlayerId,
-    gameStarted,
-    turnPhase,
-    winnerId,
-    setupPhase,
-    setupStep,
-    devCardDeck,
-    turnCount,
-    initGame,
-    rollDice,
-    nextTurn,
-    aiPlayTurn,
-    buildRoad,
-    buildSettlement,
-    buildCity,
-    canAfford,
-    buyDevelopmentCard,
-    playDevelopmentCard,
-    moveRobber,
-    executeBankTrade,
-    evaluatePlayerTrade,
-    executePlayerTrade,
-    getTradeRatio,
-    continueGame,
-    ports,
-    discardingPlayers,
-    discardResources,
-    roadBuildingMovesLeft,
-    awardHolders,
-    calculateTotalPoints,
-    calculatePublicPoints,
+  hexes,
+  nodes,
+  edges,
+  players,
+  dice,
+  currentPlayerId,
+  gameStarted,
+  turnPhase,
+  winnerId,
+  setupPhase,
+  setupStep,
+  devCardDeck,
+  turnCount,
+  initGame,
+  rollDice,
+  nextTurn,
+  aiPlayTurn,
+  buildRoad,
+  buildSettlement,
+  buildCity,
+  canAfford,
+  buyDevelopmentCard,
+  playDevelopmentCard,
+  moveRobber,
+  executeBankTrade,
+  evaluatePlayerTrade,
+  executePlayerTrade,
+  getTradeRatio,
+  continueGame,
+  ports,
+  discardingPlayers,
+  discardResources,
+  roadBuildingMovesLeft,
+  awardHolders,
+  calculateTotalPoints,
+  calculatePublicPoints,
+  logs,
+  addLog,
 } = useCatan();
 
 const buildMode = ref<"road" | "settlement" | "city" | "trade" | null>(null);
@@ -59,1921 +61,2170 @@ const buyRes = ref<ResourceType | null>(null);
 const tradeTargetId = ref<number | null>(null);
 const offer = ref<Partial<Record<ResourceType, number>>>({});
 const request = ref<Partial<Record<ResourceType, number>>>({});
+
+// Action Log Filter
+const logFilter = ref<"all" | "dice" | number>("all");
+const filteredLogs = computed(() => {
+  if (logFilter.value === "all") return [...logs.value].reverse();
+  if (logFilter.value === "dice")
+    return logs.value.filter((l) => l.type === "dice").reverse();
+  return logs.value.filter((l) => l.playerId === logFilter.value).reverse();
+});
 const tradeMessage = ref("");
 
 // Discard State
 const resourcesToDiscard = ref<Partial<Record<ResourceType, number>>>({});
 const showDiscardModal = computed(() => {
-    console.log(
-        "turnPhase:" +
-            turnPhase.value +
-            ", discardingPlayers:" +
-            discardingPlayers.value,
-    );
-    return (
-        turnPhase.value === "discarding" && discardingPlayers.value.includes(0)
-    );
+  console.log(
+    "turnPhase:" +
+      turnPhase.value +
+      ", discardingPlayers:" +
+      discardingPlayers.value,
+  );
+  return (
+    turnPhase.value === "discarding" && discardingPlayers.value.includes(0)
+  );
 });
 
 const totalHeld = computed(() => {
-    if (!players.value[0]) return 0;
-    return Object.values(players.value[0].resources).reduce((a, b) => a + b, 0);
+  if (!players.value[0]) return 0;
+  return Object.values(players.value[0].resources).reduce((a, b) => a + b, 0);
 });
 
 const isRoadBuildingMode = computed(() => roadBuildingMovesLeft.value > 0);
 const requiredDiscardCount = computed(() => Math.floor(totalHeld.value / 2));
 
+const isCostsExpanded = ref(false);
+
 const totalDiscardSelected = computed(() => {
-    return Object.values(resourcesToDiscard.value).reduce(
-        (a, b) => a + (b || 0),
-        0,
-    );
+  return Object.values(resourcesToDiscard.value).reduce(
+    (a, b) => a + (b || 0),
+    0,
+  );
 });
 
 const toggleBuildMode = (mode: "road" | "settlement" | "city" | "trade") => {
-    if (buildMode.value === mode) buildMode.value = null;
-    else buildMode.value = mode;
+  if (buildMode.value === mode) buildMode.value = null;
+  else buildMode.value = mode;
 };
 
 const openResourceModal = (type: "monopoly" | "year_of_plenty") => {
-    modalType.value = type;
-    selectedResources.value = [];
+  modalType.value = type;
+  selectedResources.value = [];
 };
 
 const selectResource = (res: ResourceType) => {
-    if (modalType.value === "monopoly") {
-        playDevelopmentCard(0, pendingCardIndex.value, { resource: res });
-        modalType.value = null;
-    } else if (modalType.value === "year_of_plenty") {
-        selectedResources.value.push(res);
-        if (selectedResources.value.length === 2) {
-            playDevelopmentCard(0, pendingCardIndex.value, {
-                resources: selectedResources.value,
-            });
-            modalType.value = null;
-        }
+  if (modalType.value === "monopoly") {
+    playDevelopmentCard(0, pendingCardIndex.value, { resource: res });
+    modalType.value = null;
+  } else if (modalType.value === "year_of_plenty") {
+    selectedResources.value.push(res);
+    if (selectedResources.value.length === 2) {
+      playDevelopmentCard(0, pendingCardIndex.value, {
+        resources: selectedResources.value,
+      });
+      modalType.value = null;
     }
+  }
 };
 
 const openTradeModal = () => {
-    modalType.value = "trade";
-    tradeMode.value = "bank";
-    sellRes.value = null;
-    buyRes.value = null;
-    offer.value = {};
-    request.value = {};
-    tradeMessage.value = "";
+  modalType.value = "trade";
+  tradeMode.value = "bank";
+  sellRes.value = null;
+  buyRes.value = null;
+  offer.value = {};
+  request.value = {};
+  tradeMessage.value = "";
 };
 
 const handleBankTrade = () => {
-    if (sellRes.value && buyRes.value) {
-        if (executeBankTrade(0, sellRes.value, buyRes.value)) {
-            modalType.value = null;
-        } else {
-            tradeMessage.value = "Insufficient resources or invalid ratio.";
-        }
+  if (sellRes.value && buyRes.value) {
+    if (executeBankTrade(0, sellRes.value, buyRes.value)) {
+      modalType.value = null;
+    } else {
+      tradeMessage.value = "Insufficient resources or invalid ratio.";
     }
+  }
 };
 
 const handlePlayerTrade = () => {
-    if (tradeTargetId.value !== null) {
-        if (
-            evaluatePlayerTrade(
-                0,
-                tradeTargetId.value,
-                offer.value,
-                request.value,
-            )
-        ) {
-            executePlayerTrade(
-                0,
-                tradeTargetId.value,
-                offer.value,
-                request.value,
-            );
-            tradeMessage.value = "Trade Accepted!";
-            setTimeout(() => (modalType.value = null), 1000);
-        } else {
-            tradeMessage.value = "AI rejected the trade.";
-        }
+  if (tradeTargetId.value !== null) {
+    if (
+      evaluatePlayerTrade(0, tradeTargetId.value, offer.value, request.value)
+    ) {
+      executePlayerTrade(0, tradeTargetId.value, offer.value, request.value);
+      tradeMessage.value = "Trade Accepted!";
+      setTimeout(() => (modalType.value = null), 1000);
+    } else {
+      tradeMessage.value = "AI rejected the trade.";
     }
+  }
 };
 
 const updateTradeValue = (
-    type: "offer" | "request",
-    res: ResourceType,
-    delta: number,
+  type: "offer" | "request",
+  res: ResourceType,
+  delta: number,
 ) => {
-    const target = type === "offer" ? offer.value : request.value;
-    const current = target[res] || 0;
-    target[res] = Math.max(0, current + delta);
+  const target = type === "offer" ? offer.value : request.value;
+  const current = target[res] || 0;
+  target[res] = Math.max(0, current + delta);
 };
 
 const handlePlayCard = (index: number) => {
-    const player = players.value[0];
-    if (!player) return;
-    const card = player.devCards[index];
-    if (
-        !card ||
-        card.played ||
-        card.turnBought === turnCount.value ||
-        !isUserTurn.value ||
-        turnPhase.value !== "rolled"
-    )
-        return;
+  const player = players.value[0];
+  if (!player) return;
+  const card = player.devCards[index];
+  if (
+    !card ||
+    card.played ||
+    card.turnBought === turnCount.value ||
+    !isUserTurn.value ||
+    turnPhase.value !== "rolled"
+  )
+    return;
 
-    if (card.type === "monopoly" || card.type === "year_of_plenty") {
-        pendingCardIndex.value = index;
-        openResourceModal(card.type);
-    } else {
-        playDevelopmentCard(0, index);
-    }
+  if (card.type === "monopoly" || card.type === "year_of_plenty") {
+    pendingCardIndex.value = index;
+    openResourceModal(card.type);
+  } else {
+    playDevelopmentCard(0, index);
+  }
 };
 
 const updateDiscard = (res: ResourceType, delta: number) => {
-    const current = resourcesToDiscard.value[res] || 0;
-    const playerRes = players.value[0]?.resources[res] || 0;
-    const newVal = Math.max(0, Math.min(playerRes, current + delta));
-    resourcesToDiscard.value = {
-        ...resourcesToDiscard.value,
-        [res]: newVal,
-    };
+  const current = resourcesToDiscard.value[res] || 0;
+  const playerRes = players.value[0]?.resources[res] || 0;
+  const newVal = Math.max(0, Math.min(playerRes, current + delta));
+  resourcesToDiscard.value = {
+    ...resourcesToDiscard.value,
+    [res]: newVal,
+  };
 };
 
 const handleDiscard = () => {
-    if (totalDiscardSelected.value === requiredDiscardCount.value) {
-        discardResources(0, resourcesToDiscard.value);
-        resourcesToDiscard.value = {};
-    }
+  if (totalDiscardSelected.value === requiredDiscardCount.value) {
+    discardResources(0, resourcesToDiscard.value);
+    resourcesToDiscard.value = {};
+  }
 };
 
 const setupInstruction = computed(() => {
-    if (setupPhase.value === "none") {
-        if (isRoadBuildingMode.value)
-            return `Road Building: Place ${roadBuildingMovesLeft.value} more roads`;
-        return null;
-    }
-    const step = setupStep.value === "settlement" ? "Settlement" : "Road";
-    const ordinal = setupPhase.value === "first" ? "1st" : "2nd";
-    return `Setup: Place your ${ordinal} ${step}`;
+  if (setupPhase.value === "none") {
+    if (isRoadBuildingMode.value)
+      return `Road Building: Place ${roadBuildingMovesLeft.value} more roads`;
+    return null;
+  }
+  const step = setupStep.value === "settlement" ? "Settlement" : "Road";
+  const ordinal = setupPhase.value === "first" ? "1st" : "2nd";
+  return `Setup: Place your ${ordinal} ${step}`;
 });
 
 const resourceEmoji: Record<string, string> = {
-    wood: "🌲",
-    brick: "🧱",
-    wool: "🐑",
-    wheat: "🌾",
-    ore: "🏔️",
-    desert: "🌵",
+  wood: "🌲",
+  brick: "🧱",
+  wool: "🐑",
+  wheat: "🌾",
+  ore: "🏔️",
+  desert: "🌵",
 };
 
 const personaNames: Record<string, string> = {
-    LAND: "拡大型",
-    CITY: "都市型",
-    BALANCE: "期待値型",
+  LAND: "拡大型",
+  CITY: "都市型",
+  BALANCE: "期待値型",
 };
 
 const handleNodeClick = (nodeId: string) => {
-    if (!isUserTurn.value || winnerId.value !== null) return;
+  if (!isUserTurn.value || winnerId.value !== null) return;
 
-    if (setupPhase.value !== "none") {
-        if (setupStep.value === "settlement") {
-            buildSettlement(nodeId, currentPlayerId.value, true);
-        }
-        return;
+  if (setupPhase.value !== "none") {
+    if (setupStep.value === "settlement") {
+      buildSettlement(nodeId, currentPlayerId.value, true);
     }
+    return;
+  }
 
-    if (buildMode.value === "settlement") {
-        if (buildSettlement(nodeId, currentPlayerId.value)) {
-            buildMode.value = null;
-        }
-    } else if (buildMode.value === "city") {
-        if (buildCity(nodeId, currentPlayerId.value)) {
-            buildMode.value = null;
-        }
+  if (buildMode.value === "settlement") {
+    if (buildSettlement(nodeId, currentPlayerId.value)) {
+      buildMode.value = null;
     }
+  } else if (buildMode.value === "city") {
+    if (buildCity(nodeId, currentPlayerId.value)) {
+      buildMode.value = null;
+    }
+  }
 };
 
 const handleEdgeClick = (edgeId: string) => {
-    if (!isUserTurn.value || winnerId.value !== null) return;
+  if (!isUserTurn.value || winnerId.value !== null) return;
 
-    if (setupPhase.value !== "none") {
-        if (setupStep.value === "road") {
-            buildRoad(edgeId, currentPlayerId.value, true);
-        }
-        return;
+  if (setupPhase.value !== "none") {
+    if (setupStep.value === "road") {
+      buildRoad(edgeId, currentPlayerId.value, true);
     }
+    return;
+  }
 
-    if (isRoadBuildingMode.value) {
-        if (buildRoad(edgeId, currentPlayerId.value, true)) {
-            roadBuildingMovesLeft.value--;
-        }
-        return;
+  if (isRoadBuildingMode.value) {
+    if (buildRoad(edgeId, currentPlayerId.value, true)) {
+      roadBuildingMovesLeft.value--;
     }
+    return;
+  }
 
-    if (buildMode.value === "road") {
-        if (buildRoad(edgeId, currentPlayerId.value)) {
-            buildMode.value = null;
-        }
+  if (buildMode.value === "road") {
+    if (buildRoad(edgeId, currentPlayerId.value)) {
+      buildMode.value = null;
     }
+  }
 };
 
 const handleHexClick = (hexId: number) => {
-    if (!isUserTurn.value || turnPhase.value !== "robber") return;
-    moveRobber(hexId, currentPlayerId.value);
+  if (!isUserTurn.value || turnPhase.value !== "robber") return;
+  moveRobber(hexId, currentPlayerId.value);
 };
 
 watch(currentPlayerId, (newId) => {
-    if (newId !== 0 && gameStarted.value && winnerId.value === null) {
-        aiPlayTurn();
-    }
+  if (newId !== 0 && gameStarted.value && winnerId.value === null) {
+    aiPlayTurn();
+  }
 });
 
 watch([gameStarted, setupPhase], ([started, phase]) => {
-    if (started && phase !== "none" && !isUserTurn.value) {
-        aiPlayTurn();
-    }
+  if (started && phase !== "none" && !isUserTurn.value) {
+    aiPlayTurn();
+  }
 });
 
 onMounted(() => {
-    // Game init happens via UI overlay
+  // Game init happens via UI overlay
 });
 </script>
 
 <template>
-    <div class="catan-game-page">
-        <div class="catan-container">
-            <!-- Setup Overlay -->
-            <div v-if="!gameStarted" class="setup-overlay">
-                <div class="setup-card">
-                    <h1 class="setup-title">CATAN SOLO</h1>
-                    <p class="setup-subtitle">Select number of AI players</p>
-                    <div class="setup-options">
-                        <button class="setup-btn" @click="initGame(2)">
-                            <span class="btn-main">1 VS 1</span>
-                            <span class="btn-sub">Duel Mode</span>
-                        </button>
-                        <button class="setup-btn" @click="initGame(3)">
-                            <span class="btn-main">1 VS 2</span>
-                            <span class="btn-sub">Triangle Battle</span>
-                        </button>
-                        <button
-                            class="setup-btn highlight"
-                            @click="initGame(4)"
-                        >
-                            <span class="btn-main">1 VS 3</span>
-                            <span class="btn-sub">Full Classic</span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <div v-if="winnerId !== null" class="setup-overlay victory">
-                <div class="setup-card">
-                    <h1 class="setup-title">VICTORY!</h1>
-                    <p class="setup-subtitle">
-                        {{ players[winnerId]?.name }} wins the game!
-                    </p>
-                    <div class="setup-options">
-                        <button
-                            class="setup-btn highlight"
-                            @click="continueGame"
-                        >
-                            <span class="btn-main">CONTINUE</span>
-                            <span class="btn-sub">Keep playing for fun</span>
-                        </button>
-                        <button
-                            class="setup-btn"
-                            @click="initGame(players.length)"
-                        >
-                            <span class="btn-main">RESTART</span>
-                            <span class="btn-sub"
-                                >Play again with same players</span
-                            >
-                        </button>
-                        <button class="setup-btn" @click="router.push('/')">
-                            <span class="btn-main">BACK TO HOME</span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <div v-else-if="gameStarted" class="game-content">
-                <div class="header">
-                    <div class="header-left">
-                        <button class="back-btn" @click="router.push('/')">
-                            ← BACK
-                        </button>
-                        <div class="turn-mini">
-                            <span
-                                class="dot"
-                                :style="{
-                                    backgroundColor: currentPlayer?.color,
-                                }"
-                            ></span>
-                            <span class="name">{{
-                                isUserTurn ? "YOUR TURN" : currentPlayer?.name
-                            }}</span>
-                        </div>
-                        <button
-                            class="reset-mini-btn"
-                            @click="initGame(players.length)"
-                            title="Reset Game"
-                        >
-                            🔄 RESET
-                        </button>
-                    </div>
-
-                    <div class="game-toolbar" v-if="setupPhase === 'none'">
-                        <!-- Dice -->
-                        <div
-                            class="dice-section"
-                            @click="rollDice"
-                            :class="{
-                                'can-roll': isUserTurn && turnPhase === 'ready',
-                            }"
-                        >
-                            <div class="die">{{ dice[0] }}</div>
-                            <div class="die">{{ dice[1] }}</div>
-                            <div class="dice-total">
-                                {{ dice[0] + dice[1] }}
-                            </div>
-                        </div>
-
-                        <div class="divider"></div>
-
-                        <!-- Build Actions -->
-                        <div
-                            class="build-section"
-                            v-if="isUserTurn && turnPhase === 'rolled'"
-                        >
-                            <button
-                                v-for="type in [
-                                    'road',
-                                    'settlement',
-                                    'city',
-                                ] as const"
-                                :key="type"
-                                class="toolbar-btn build"
-                                :class="{
-                                    active: buildMode === type,
-                                    disabled: !canAfford(currentPlayerId, type),
-                                }"
-                                @click="toggleBuildMode(type)"
-                            >
-                                {{ type.toUpperCase() }}
-                            </button>
-                            <button
-                                class="toolbar-btn build buy-card"
-                                :class="{
-                                    disabled:
-                                        !canAfford(
-                                            currentPlayerId,
-                                            'devCard',
-                                        ) || devCardDeck.length === 0,
-                                }"
-                                @click="buyDevelopmentCard(currentPlayerId)"
-                            >
-                                {{
-                                    devCardDeck.length > 0
-                                        ? "BUY CARD"
-                                        : "SOLD OUT"
-                                }}
-                            </button>
-                            <button
-                                class="toolbar-btn build trade-btn"
-                                @click="openTradeModal"
-                            >
-                                TRADE
-                            </button>
-                        </div>
-
-                        <div
-                            class="divider"
-                            v-if="isUserTurn && turnPhase === 'rolled'"
-                        ></div>
-
-                        <!-- Turn Actions -->
-                        <div class="action-section" v-if="isUserTurn">
-                            <button
-                                v-if="turnPhase === 'ready'"
-                                class="toolbar-btn roll"
-                                @click="isUserTurn ? rollDice() : null"
-                            >
-                                ROLL
-                            </button>
-                            <button
-                                v-else-if="turnPhase !== 'robber'"
-                                class="toolbar-btn end"
-                                @click="nextTurn"
-                            >
-                                END TURN
-                            </button>
-                        </div>
-
-                        <!-- AI Wait -->
-                        <div v-if="!isUserTurn" class="ai-wait-toolbar">
-                            <span class="loading-dots">AI Thinking</span>
-                        </div>
-                    </div>
-
-                    <!-- Robber Toolbar -->
-                    <div
-                        class="game-toolbar robber-mode"
-                        v-else-if="turnPhase === 'robber' && isUserTurn"
-                    >
-                        <span class="robber-icon">🦹</span>
-                        <span class="robber-text"
-                            >Move the Robber to a new tile!</span
-                        >
-                    </div>
-
-                    <!-- Setup / Road Building Phase Dashboard -->
-                    <div class="setup-dash" v-else>
-                        <div
-                            class="setup-message"
-                            :class="{ 'road-building': isRoadBuildingMode }"
-                        >
-                            <span class="setup-icon">{{
-                                isRoadBuildingMode ? "🚧" : "🏠"
-                            }}</span>
-                            <span class="setup-text">{{
-                                setupInstruction
-                            }}</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="game-container">
-                    <div class="board-wrapper">
-                        <p
-                            v-if="setupInstruction && isUserTurn"
-                            class="build-instruction-overlay setup"
-                        >
-                            {{ setupInstruction }}
-                        </p>
-                        <p
-                            v-else-if="buildMode"
-                            class="build-instruction-overlay"
-                        >
-                            Click board to place {{ buildMode.toUpperCase() }}
-                        </p>
-                        <HexBoard
-                            :hexes="hexes"
-                            :nodes="nodes"
-                            :edges="edges"
-                            :players="players"
-                            :ports="ports"
-                            @node-click="handleNodeClick"
-                            @edge-click="handleEdgeClick"
-                            :class="{
-                                ['build-' + buildMode]: buildMode,
-                                'setup-mode':
-                                    setupPhase !== 'none' || isRoadBuildingMode,
-                                'robber-mode': turnPhase === 'robber',
-                            }"
-                            @hex-click="handleHexClick"
-                        />
-                    </div>
-
-                    <div class="game-info-side">
-                        <div class="player-resources">
-                            <div class="info-header">
-                                <h2>Players</h2>
-                            </div>
-                            <div
-                                v-for="p in players"
-                                :key="p.id"
-                                class="player-card"
-                                :class="{ active: p.id === currentPlayerId }"
-                            >
-                                <div class="player-header">
-                                    <span
-                                        class="color-indicator"
-                                        :style="{
-                                            backgroundColor: p?.color || '#ccc',
-                                        }"
-                                    ></span>
-                                    <span class="player-name">
-                                        {{ p.name }}
-                                        <span
-                                            v-if="p.id !== 0"
-                                            class="persona-tag"
-                                            >({{
-                                                personaNames[p.persona]
-                                            }})</span
-                                        >
-                                    </span>
-                                    <div class="award-badges">
-                                        <span
-                                            v-if="
-                                                awardHolders.longestRoad
-                                                    .playerId === p.id
-                                            "
-                                            class="award-badge"
-                                            title="Longest Road"
-                                            >🎖️</span
-                                        >
-                                        <span
-                                            v-if="
-                                                awardHolders.largestArmy
-                                                    .playerId === p.id
-                                            "
-                                            class="award-badge"
-                                            title="Largest Army"
-                                            >⚔️</span
-                                        >
-                                    </div>
-                                    <div class="player-stats-mini">
-                                        <span
-                                            class="player-points"
-                                            :title="
-                                                p.id === 0 || winnerId !== null
-                                                    ? 'Total Points: ' +
-                                                      calculateTotalPoints(p.id)
-                                                    : 'Public Points'
-                                            "
-                                        >
-                                            {{
-                                                p.id === 0 || winnerId !== null
-                                                    ? calculateTotalPoints(p.id)
-                                                    : calculatePublicPoints(
-                                                          p.id,
-                                                      )
-                                            }}
-                                            PV
-                                        </span>
-                                        <span
-                                            class="card-count"
-                                            v-if="
-                                                p.devCards.filter(
-                                                    (c) => !c.played,
-                                                ).length > 0
-                                            "
-                                            title="Held Cards"
-                                        >
-                                            🎴
-                                            {{
-                                                p.devCards.filter(
-                                                    (c) => !c.played,
-                                                ).length
-                                            }}
-                                        </span>
-                                    </div>
-                                </div>
-
-                                <!-- Resources -->
-                                <div class="resources-grid">
-                                    <template
-                                        v-for="(val, res) in p.resources"
-                                        :key="res"
-                                    >
-                                        <div
-                                            v-if="res !== 'desert'"
-                                            class="resource-item"
-                                            :title="res"
-                                        >
-                                            <span class="res-icon">{{
-                                                resourceEmoji[res] || "?"
-                                            }}</span>
-                                            <span class="res-val">{{
-                                                val
-                                            }}</span>
-                                        </div>
-                                    </template>
-                                </div>
-
-                                <!-- Played Cards (Visible to all) -->
-                                <div
-                                    v-if="
-                                        p.devCards.filter((c) => c.played)
-                                            .length > 0
-                                    "
-                                    class="played-cards-section"
-                                >
-                                    <div class="played-cards-list">
-                                        <span
-                                            v-for="(
-                                                card, idx
-                                            ) in p.devCards.filter(
-                                                (c) => c.played,
-                                            )"
-                                            :key="idx"
-                                            class="played-card-icon"
-                                            :title="card.type.toUpperCase()"
-                                        >
-                                            {{
-                                                card.type === "knight"
-                                                    ? "⚔️"
-                                                    : card.type ===
-                                                        "road_building"
-                                                      ? "🚧"
-                                                      : card.type === "monopoly"
-                                                        ? "📜"
-                                                        : "✨"
-                                            }}
-                                        </span>
-                                    </div>
-                                </div>
-
-                                <!-- My Unplayed Cards (User only) -->
-                                <div
-                                    v-if="
-                                        p.id === 0 &&
-                                        p.devCards.filter(
-                                            (c) => !c.played && c.type !== 'vp',
-                                        ).length > 0
-                                    "
-                                    class="my-cards-section"
-                                >
-                                    <div class="cards-header">Your Hand</div>
-                                    <div class="cards-list">
-                                        <div
-                                            v-for="(
-                                                card, idx
-                                            ) in p.devCards.filter(
-                                                (c) =>
-                                                    !c.played &&
-                                                    c.type !== 'vp',
-                                            )"
-                                            :key="idx"
-                                            class="card-item"
-                                            :class="{
-                                                playable:
-                                                    card.turnBought <
-                                                        turnCount &&
-                                                    isUserTurn &&
-                                                    turnPhase === 'rolled',
-                                            }"
-                                            @click="
-                                                handlePlayCard(
-                                                    p.devCards.indexOf(card),
-                                                )
-                                            "
-                                        >
-                                            <span class="card-icon">{{
-                                                card.type === "knight"
-                                                    ? "⚔️"
-                                                    : "📜"
-                                            }}</span>
-                                            <span class="card-label">{{
-                                                card.type
-                                                    .replace("_", " ")
-                                                    .toUpperCase()
-                                            }}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Costs Reference -->
-                        <div class="costs-reference-card">
-                            <div class="info-header">
-                                <h3>Costs</h3>
-                            </div>
-                            <div class="costs-grid">
-                                <div class="cost-row">
-                                    <span>🏠 Settlement:</span>
-                                    <span class="cost-icons">🌲🧱🐑🌾</span>
-                                </div>
-                                <div class="cost-row">
-                                    <span>🏛️ City:</span>
-                                    <span class="cost-icons">🌾🌾🏔️🏔️🏔️</span>
-                                </div>
-                                <div class="cost-row">
-                                    <span>🚧 Road:</span>
-                                    <span class="cost-icons">🌲🧱</span>
-                                </div>
-                                <div class="cost-row">
-                                    <span>📜 Card:</span>
-                                    <span class="cost-icons">🐑🌾🏔️</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Multi-purpose Modal (Resource Selection / Trade) -->
-                <div
-                    v-if="modalType || showDiscardModal"
-                    class="resource-modal-overlay"
-                >
-                    <div
-                        class="resource-modal"
-                        :class="{
-                            'trade-modal':
-                                modalType === 'trade' || showDiscardModal,
-                        }"
-                    >
-                        <template v-if="showDiscardModal">
-                            <h3>RESOURCE OVERFLOW!</h3>
-                            <p class="discard-instruction">
-                                A '7' was rolled. You have
-                                {{ totalHeld }} cards.
-                            </p>
-                            <p class="discard-instruction highlight">
-                                You must discard
-                                {{ requiredDiscardCount }} cards.
-                            </p>
-
-                            <div class="discard-grid">
-                                <div
-                                    v-for="res in [
-                                        'wood',
-                                        'brick',
-                                        'wool',
-                                        'wheat',
-                                        'ore',
-                                    ] as const"
-                                    :key="res"
-                                    class="discard-item"
-                                >
-                                    <span class="res-icon-mini">{{
-                                        resourceEmoji[res]
-                                    }}</span>
-                                    <button
-                                        class="adjust-btn-mini"
-                                        @click="updateDiscard(res, -1)"
-                                        :disabled="!resourcesToDiscard[res]"
-                                    >
-                                        -
-                                    </button>
-                                    <span class="val-mini"
-                                        >{{ resourcesToDiscard[res] || 0
-                                        }}<span class="max-part"
-                                            >/{{
-                                                players[0]?.resources[res]
-                                            }}</span
-                                        ></span
-                                    >
-                                    <button
-                                        class="adjust-btn-mini"
-                                        @click="updateDiscard(res, 1)"
-                                        :disabled="
-                                            (resourcesToDiscard[res] || 0) >=
-                                            (players[0]?.resources[res] || 0)
-                                        "
-                                    >
-                                        +
-                                    </button>
-                                </div>
-                            </div>
-
-                            <p class="discard-status">
-                                Selected: {{ totalDiscardSelected }} /
-                                {{ requiredDiscardCount }}
-                            </p>
-                            <button
-                                class="execute-btn warning"
-                                :disabled="
-                                    totalDiscardSelected !==
-                                    requiredDiscardCount
-                                "
-                                @click="handleDiscard"
-                            >
-                                DISCARD RESOURCES
-                            </button>
-                        </template>
-
-                        <template v-else-if="modalType === 'trade'">
-                            <h3>TRADING</h3>
-                            <div class="trade-tabs">
-                                <button
-                                    :class="{ active: tradeMode === 'bank' }"
-                                    @click="tradeMode = 'bank'"
-                                >
-                                    BANK
-                                </button>
-                                <button
-                                    :class="{ active: tradeMode === 'player' }"
-                                    @click="tradeMode = 'player'"
-                                >
-                                    PLAYERS
-                                </button>
-                            </div>
-
-                            <!-- Bank Trade UI -->
-                            <div
-                                v-if="tradeMode === 'bank'"
-                                class="bank-trade-ui"
-                            >
-                                <div class="trade-section">
-                                    <p>
-                                        SELL ({{
-                                            sellRes
-                                                ? getTradeRatio(0, sellRes)
-                                                : "?"
-                                        }}:1)
-                                    </p>
-                                    <div class="resource-select-mini">
-                                        <button
-                                            v-for="res in [
-                                                'wood',
-                                                'brick',
-                                                'wool',
-                                                'wheat',
-                                                'ore',
-                                            ] as const"
-                                            :key="res"
-                                            :class="{
-                                                selected: sellRes === res,
-                                                disabled:
-                                                    (players[0]?.resources?.[
-                                                        res
-                                                    ] ?? 0) <
-                                                    getTradeRatio(0, res),
-                                            }"
-                                            @click="sellRes = res"
-                                        >
-                                            {{ resourceEmoji[res] }}
-                                        </button>
-                                    </div>
-                                </div>
-                                <div class="trade-arrow">⬇️</div>
-                                <div class="trade-section">
-                                    <p>BUY (1)</p>
-                                    <div class="resource-select-mini">
-                                        <button
-                                            v-for="res in [
-                                                'wood',
-                                                'brick',
-                                                'wool',
-                                                'wheat',
-                                                'ore',
-                                            ] as const"
-                                            :key="res"
-                                            :class="{
-                                                selected: buyRes === res,
-                                            }"
-                                            @click="buyRes = res"
-                                        >
-                                            {{ resourceEmoji[res] }}
-                                        </button>
-                                    </div>
-                                </div>
-                                <button
-                                    class="execute-btn"
-                                    :disabled="!sellRes || !buyRes"
-                                    @click="handleBankTrade"
-                                >
-                                    EXECUTE TRADE
-                                </button>
-                            </div>
-
-                            <!-- Player Trade UI -->
-                            <div v-else class="player-trade-ui">
-                                <div class="target-select">
-                                    <p>TRADE WITH:</p>
-                                    <div class="ai-targets">
-                                        <button
-                                            v-for="p in players.filter(
-                                                (p) => p.id !== 0,
-                                            )"
-                                            :key="p.id"
-                                            :class="{
-                                                selected:
-                                                    tradeTargetId === p.id,
-                                            }"
-                                            @click="tradeTargetId = p.id"
-                                        >
-                                            {{ p.name }}
-                                        </button>
-                                    </div>
-                                </div>
-                                <div class="trade-grid">
-                                    <div class="trade-col">
-                                        <p>YOU OFFER</p>
-                                        <div
-                                            v-for="res in [
-                                                'wood',
-                                                'brick',
-                                                'wool',
-                                                'wheat',
-                                                'ore',
-                                            ] as const"
-                                            :key="res"
-                                            class="trade-row"
-                                        >
-                                            <span>{{
-                                                resourceEmoji[res]
-                                            }}</span>
-                                            <button
-                                                @click="
-                                                    updateTradeValue(
-                                                        'offer',
-                                                        res,
-                                                        -1,
-                                                    )
-                                                "
-                                            >
-                                                -
-                                            </button>
-                                            <span class="val">{{
-                                                offer[res] || 0
-                                            }}</span>
-                                            <button
-                                                @click="
-                                                    updateTradeValue(
-                                                        'offer',
-                                                        res,
-                                                        1,
-                                                    )
-                                                "
-                                            >
-                                                +
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div class="trade-col">
-                                        <p>THEY GIVE</p>
-                                        <div
-                                            v-for="res in [
-                                                'wood',
-                                                'brick',
-                                                'wool',
-                                                'wheat',
-                                                'ore',
-                                            ] as const"
-                                            :key="res"
-                                            class="trade-row"
-                                        >
-                                            <span>{{
-                                                resourceEmoji[res]
-                                            }}</span>
-                                            <button
-                                                @click="
-                                                    updateTradeValue(
-                                                        'request',
-                                                        res,
-                                                        -1,
-                                                    )
-                                                "
-                                            >
-                                                -
-                                            </button>
-                                            <span class="val">{{
-                                                request[res] || 0
-                                            }}</span>
-                                            <button
-                                                @click="
-                                                    updateTradeValue(
-                                                        'request',
-                                                        res,
-                                                        1,
-                                                    )
-                                                "
-                                            >
-                                                +
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <button
-                                    class="execute-btn"
-                                    :disabled="tradeTargetId === null"
-                                    @click="handlePlayerTrade"
-                                >
-                                    OFFER TRADE
-                                </button>
-                            </div>
-
-                            <p class="trade-msg" v-if="tradeMessage">
-                                {{ tradeMessage }}
-                            </p>
-                        </template>
-
-                        <template v-else>
-                            <h3>
-                                {{
-                                    modalType === "monopoly"
-                                        ? "Select resource to MONOPOLIZE"
-                                        : "Select 2 resources for YEAR OF PLENTY"
-                                }}
-                            </h3>
-                            <p v-if="modalType === 'year_of_plenty'">
-                                Selected:
-                                {{
-                                    selectedResources
-                                        .map((r) => resourceEmoji[r])
-                                        .join(" ")
-                                }}
-                            </p>
-                            <div class="resource-select-grid">
-                                <button
-                                    v-for="res in [
-                                        'wood',
-                                        'brick',
-                                        'wool',
-                                        'wheat',
-                                        'ore',
-                                    ] as const"
-                                    :key="res"
-                                    class="res-select-btn"
-                                    @click="selectResource(res)"
-                                >
-                                    <span class="res-icon">{{
-                                        resourceEmoji[res]
-                                    }}</span>
-                                    <span class="res-label">{{
-                                        res.toUpperCase()
-                                    }}</span>
-                                </button>
-                            </div>
-                        </template>
-                        <button
-                            v-if="!showDiscardModal"
-                            class="cancel-btn"
-                            @click="modalType = null"
-                        >
-                            CANCEL
-                        </button>
-                    </div>
-                </div>
-            </div>
+  <div class="catan-game-page">
+    <div class="catan-container">
+      <!-- Setup Overlay -->
+      <div v-if="!gameStarted" class="setup-overlay">
+        <div class="setup-card">
+          <h1 class="setup-title">CATAN SOLO</h1>
+          <p class="setup-subtitle">Select number of AI players</p>
+          <div class="setup-options">
+            <button class="setup-btn" @click="initGame(2)">
+              <span class="btn-main">1 VS 1</span>
+              <span class="btn-sub">Duel Mode</span>
+            </button>
+            <button class="setup-btn" @click="initGame(3)">
+              <span class="btn-main">1 VS 2</span>
+              <span class="btn-sub">Triangle Battle</span>
+            </button>
+            <button class="setup-btn highlight" @click="initGame(4)">
+              <span class="btn-main">1 VS 3</span>
+              <span class="btn-sub">Full Classic</span>
+            </button>
+          </div>
         </div>
+      </div>
+
+      <div v-if="winnerId !== null" class="setup-overlay victory">
+        <div class="setup-card">
+          <h1 class="setup-title">VICTORY!</h1>
+          <p class="setup-subtitle">
+            {{ players[winnerId]?.name }} wins the game!
+          </p>
+          <div class="setup-options">
+            <button class="setup-btn highlight" @click="continueGame">
+              <span class="btn-main">CONTINUE</span>
+              <span class="btn-sub">Keep playing for fun</span>
+            </button>
+            <button class="setup-btn" @click="initGame(players.length)">
+              <span class="btn-main">RESTART</span>
+              <span class="btn-sub">Play again with same players</span>
+            </button>
+            <button class="setup-btn" @click="router.push('/')">
+              <span class="btn-main">BACK TO HOME</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="gameStarted" class="game-content">
+        <div class="header">
+          <div class="header-left">
+            <button class="back-btn" @click="router.push('/')">← BACK</button>
+            <div class="turn-mini">
+              <span
+                class="dot"
+                :style="{
+                  backgroundColor: currentPlayer?.color,
+                }"
+              ></span>
+              <span class="name">{{
+                isUserTurn ? "YOUR TURN" : currentPlayer?.name
+              }}</span>
+            </div>
+            <button
+              class="reset-mini-btn"
+              @click="initGame(players.length)"
+              title="Reset Game"
+            >
+              🔄 RESET
+            </button>
+          </div>
+
+          <div class="game-toolbar" v-if="setupPhase === 'none'">
+            <!-- Dice -->
+            <div
+              class="dice-section"
+              @click="rollDice"
+              :class="{
+                'can-roll': isUserTurn && turnPhase === 'ready',
+              }"
+            >
+              <div class="die">{{ dice[0] }}</div>
+              <div class="die">{{ dice[1] }}</div>
+              <div class="dice-total">
+                {{ dice[0] + dice[1] }}
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <!-- Build Actions -->
+            <div
+              class="build-section"
+              v-if="isUserTurn && turnPhase === 'rolled'"
+            >
+              <button
+                v-for="type in ['road', 'settlement', 'city'] as const"
+                :key="type"
+                class="toolbar-btn build"
+                :class="{
+                  active: buildMode === type,
+                  disabled: !canAfford(currentPlayerId, type),
+                }"
+                @click="toggleBuildMode(type)"
+              >
+                {{ type.toUpperCase() }}
+              </button>
+              <button
+                class="toolbar-btn build buy-card"
+                :class="{
+                  disabled:
+                    !canAfford(currentPlayerId, 'devCard') ||
+                    devCardDeck.length === 0,
+                }"
+                @click="buyDevelopmentCard(currentPlayerId)"
+              >
+                {{ devCardDeck.length > 0 ? "BUY CARD" : "SOLD OUT" }}
+              </button>
+              <button
+                class="toolbar-btn build trade-btn"
+                @click="openTradeModal"
+              >
+                TRADE
+              </button>
+            </div>
+
+            <div
+              class="divider"
+              v-if="isUserTurn && turnPhase === 'rolled'"
+            ></div>
+
+            <!-- Turn Actions -->
+            <div class="action-section" v-if="isUserTurn">
+              <button
+                v-if="turnPhase === 'ready'"
+                class="toolbar-btn roll"
+                @click="isUserTurn ? rollDice() : null"
+              >
+                ROLL
+              </button>
+              <button
+                v-else-if="turnPhase !== 'robber'"
+                class="toolbar-btn end"
+                @click="nextTurn"
+              >
+                END TURN
+              </button>
+            </div>
+
+            <!-- AI Wait -->
+            <div v-if="!isUserTurn" class="ai-wait-toolbar">
+              <span class="loading-dots">AI Thinking</span>
+            </div>
+          </div>
+
+          <!-- Robber Toolbar -->
+          <div
+            class="game-toolbar robber-mode"
+            v-else-if="turnPhase === 'robber' && isUserTurn"
+          >
+            <span class="robber-icon">🦹</span>
+            <span class="robber-text">Move the Robber to a new tile!</span>
+          </div>
+
+          <!-- Setup / Road Building Phase Dashboard -->
+          <div class="setup-dash" v-else>
+            <div
+              class="setup-message"
+              :class="{ 'road-building': isRoadBuildingMode }"
+            >
+              <span class="setup-icon">{{
+                isRoadBuildingMode ? "🚧" : "🏠"
+              }}</span>
+              <span class="setup-text">{{ setupInstruction }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="game-container">
+          <div class="board-wrapper">
+            <p
+              v-if="setupInstruction && isUserTurn"
+              class="build-instruction-overlay setup"
+            >
+              {{ setupInstruction }}
+            </p>
+            <p v-else-if="buildMode" class="build-instruction-overlay">
+              Click board to place {{ buildMode.toUpperCase() }}
+            </p>
+            <HexBoard
+              :hexes="hexes"
+              :nodes="nodes"
+              :edges="edges"
+              :players="players"
+              :ports="ports"
+              @node-click="handleNodeClick"
+              @edge-click="handleEdgeClick"
+              :class="{
+                ['build-' + buildMode]: buildMode,
+                'setup-mode': setupPhase !== 'none' || isRoadBuildingMode,
+                'robber-mode': turnPhase === 'robber',
+              }"
+              @hex-click="handleHexClick"
+            />
+
+            <!-- Costs Overlay -->
+            <div
+              class="costs-overlay"
+              :class="{ expanded: isCostsExpanded }"
+              @click="isCostsExpanded = !isCostsExpanded"
+            >
+              <div class="costs-overlay-header">
+                <span class="costs-title">Costs</span>
+                <span class="costs-hint">{{
+                  isCostsExpanded ? "Collapse" : "Expand"
+                }}</span>
+              </div>
+              <div class="costs-grid">
+                <div class="cost-row">
+                  <span class="cost-label">🏠 Settlement:</span>
+                  <span class="cost-icons">🌲🧱🐑🌾</span>
+                </div>
+                <div class="cost-row">
+                  <span class="cost-label">🏛️ City:</span>
+                  <span class="cost-icons">🌾🌾🏔️🏔️🏔️</span>
+                </div>
+                <div class="cost-row">
+                  <span class="cost-label">🚧 Road:</span>
+                  <span class="cost-icons">🌲🧱</span>
+                </div>
+                <div class="cost-row">
+                  <span class="cost-label">📜 Card:</span>
+                  <span class="cost-icons">🐑🌾🏔️</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="game-info-side">
+            <div class="player-resources">
+              <div class="info-header">
+                <h2>Players</h2>
+              </div>
+              <div class="player-cards-grid">
+                <div
+                  v-for="p in players"
+                  :key="p.id"
+                  class="player-card"
+                  :class="{ active: p.id === currentPlayerId }"
+                >
+                  <div class="player-header">
+                    <span
+                      class="color-indicator"
+                      :style="{
+                        backgroundColor: p?.color || '#ccc',
+                      }"
+                    ></span>
+                    <span class="player-name">
+                      {{ p.name }}
+                    </span>
+                    <div class="award-badges">
+                      <span
+                        v-if="awardHolders.longestRoad.playerId === p.id"
+                        class="award-badge"
+                        title="Longest Road"
+                        >🎖️</span
+                      >
+                      <span
+                        v-if="awardHolders.largestArmy.playerId === p.id"
+                        class="award-badge"
+                        title="Largest Army"
+                        >⚔️</span
+                      >
+                    </div>
+                    <div class="player-stats-mini">
+                      <span
+                        class="player-points"
+                        :title="
+                          p.id === 0 || winnerId !== null
+                            ? 'Total Points: ' + calculateTotalPoints(p.id)
+                            : 'Public Points'
+                        "
+                      >
+                        {{
+                          p.id === 0 || winnerId !== null
+                            ? calculateTotalPoints(p.id)
+                            : calculatePublicPoints(p.id)
+                        }}
+                        PV
+                      </span>
+                    </div>
+                  </div>
+
+                  <!-- Resources -->
+                  <div v-if="p.id === 0" class="resources-grid">
+                    <template v-for="(val, res) in p.resources" :key="res">
+                      <div
+                        v-if="res !== 'desert'"
+                        class="resource-item"
+                        :title="res"
+                      >
+                        <span class="res-icon">{{
+                          resourceEmoji[res] || "?"
+                        }}</span>
+                        <span class="res-val">{{ val }}</span>
+                      </div>
+                    </template>
+                  </div>
+                  <div v-else class="opponent-resources-summary">
+                    <span class="res-icon">🃏</span>
+                    <span class="res-total-label">Resources:</span>
+                    <span class="res-val">{{
+                      Object.values(p.resources).reduce(
+                        (a, b) => a + (b || 0),
+                        0,
+                      )
+                    }}</span>
+                  </div>
+
+                  <!-- Hand Count & Played Cards -->
+                  <div class="player-card-footer">
+                    <span
+                      class="card-count"
+                      v-if="p.devCards.filter((c) => !c.played).length > 0"
+                      title="Held Cards"
+                    >
+                      🎴 {{ p.devCards.filter((c) => !c.played).length }}
+                    </span>
+                    <div class="played-icons-mini">
+                      <span
+                        v-for="(card, idx) in p.devCards.filter(
+                          (c) => c.played,
+                        )"
+                        :key="idx"
+                        class="mini-card-icon"
+                      >
+                        {{
+                          card.type === "knight"
+                            ? "⚔️"
+                            : card.type === "road_building"
+                              ? "🚧"
+                              : card.type === "monopoly"
+                                ? "📜"
+                                : "✨"
+                        }}
+                      </span>
+                    </div>
+                  </div>
+
+                  <!-- My Unplayed Cards (User only) - Inside card for 4th player space -->
+                  <div
+                    v-if="
+                      p.id === 0 &&
+                      p.devCards.filter((c) => !c.played && c.type !== 'vp')
+                        .length > 0
+                    "
+                    class="my-hand-mini"
+                  >
+                    <div
+                      v-for="(card, idx) in p.devCards.filter(
+                        (c) => !c.played && c.type !== 'vp',
+                      )"
+                      :key="idx"
+                      class="mini-hand-item"
+                      :class="{
+                        playable:
+                          card.turnBought < turnCount &&
+                          isUserTurn &&
+                          turnPhase === 'rolled',
+                      }"
+                      @click="handlePlayCard(p.devCards.indexOf(card))"
+                    >
+                      {{ card.type === "knight" ? "⚔️" : "📜" }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Action Log -->
+            <div class="action-log-card">
+              <div class="info-header">
+                <h2>Action Log</h2>
+              </div>
+              <div class="log-filters">
+                <button
+                  :class="{ active: logFilter === 'all' }"
+                  @click="logFilter = 'all'"
+                >
+                  All
+                </button>
+                <button
+                  :class="{ active: logFilter === 'dice' }"
+                  @click="logFilter = 'dice'"
+                >
+                  Dice
+                </button>
+                <button
+                  v-for="p in players"
+                  :key="p.id"
+                  :class="{ active: logFilter === p.id }"
+                  @click="logFilter = p.id"
+                >
+                  P{{ p.id }}
+                </button>
+              </div>
+              <div class="log-entries">
+                <div
+                  v-for="log in filteredLogs"
+                  :key="log.id"
+                  class="log-entry"
+                  :class="log.type"
+                >
+                  <span class="log-turn">T{{ log.turn }}</span>
+                  <span class="log-msg">{{ log.message }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Multi-purpose Modal (Resource Selection / Trade) -->
+        <div
+          v-if="modalType || showDiscardModal"
+          class="resource-modal-overlay"
+        >
+          <div
+            class="resource-modal"
+            :class="{
+              'trade-modal': modalType === 'trade' || showDiscardModal,
+            }"
+          >
+            <template v-if="showDiscardModal">
+              <h3>RESOURCE OVERFLOW!</h3>
+              <p class="discard-instruction">
+                A '7' was rolled. You have
+                {{ totalHeld }} cards.
+              </p>
+              <p class="discard-instruction highlight">
+                You must discard
+                {{ requiredDiscardCount }} cards.
+              </p>
+
+              <div class="discard-grid">
+                <div
+                  v-for="res in [
+                    'wood',
+                    'brick',
+                    'wool',
+                    'wheat',
+                    'ore',
+                  ] as const"
+                  :key="res"
+                  class="discard-item"
+                >
+                  <span class="res-icon-mini">{{ resourceEmoji[res] }}</span>
+                  <button
+                    class="adjust-btn-mini"
+                    @click="updateDiscard(res, -1)"
+                    :disabled="!resourcesToDiscard[res]"
+                  >
+                    -
+                  </button>
+                  <span class="val-mini"
+                    >{{ resourcesToDiscard[res] || 0
+                    }}<span class="max-part"
+                      >/{{ players[0]?.resources[res] }}</span
+                    ></span
+                  >
+                  <button
+                    class="adjust-btn-mini"
+                    @click="updateDiscard(res, 1)"
+                    :disabled="
+                      (resourcesToDiscard[res] || 0) >=
+                      (players[0]?.resources[res] || 0)
+                    "
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+
+              <p class="discard-status">
+                Selected: {{ totalDiscardSelected }} /
+                {{ requiredDiscardCount }}
+              </p>
+              <button
+                class="execute-btn warning"
+                :disabled="totalDiscardSelected !== requiredDiscardCount"
+                @click="handleDiscard"
+              >
+                DISCARD RESOURCES
+              </button>
+            </template>
+
+            <template v-else-if="modalType === 'trade'">
+              <h3>TRADING</h3>
+              <div class="trade-tabs">
+                <button
+                  :class="{ active: tradeMode === 'bank' }"
+                  @click="tradeMode = 'bank'"
+                >
+                  BANK
+                </button>
+                <button
+                  :class="{ active: tradeMode === 'player' }"
+                  @click="tradeMode = 'player'"
+                >
+                  PLAYERS
+                </button>
+              </div>
+
+              <!-- Bank Trade UI -->
+              <div v-if="tradeMode === 'bank'" class="bank-trade-ui">
+                <div class="trade-section">
+                  <p>
+                    SELL ({{ sellRes ? getTradeRatio(0, sellRes) : "?" }}:1)
+                  </p>
+                  <div class="resource-select-mini">
+                    <button
+                      v-for="res in [
+                        'wood',
+                        'brick',
+                        'wool',
+                        'wheat',
+                        'ore',
+                      ] as const"
+                      :key="res"
+                      :class="{
+                        selected: sellRes === res,
+                        disabled:
+                          (players[0]?.resources?.[res] ?? 0) <
+                          getTradeRatio(0, res),
+                      }"
+                      @click="sellRes = res"
+                    >
+                      {{ resourceEmoji[res] }}
+                    </button>
+                  </div>
+                </div>
+                <div class="trade-arrow">⬇️</div>
+                <div class="trade-section">
+                  <p>BUY (1)</p>
+                  <div class="resource-select-mini">
+                    <button
+                      v-for="res in [
+                        'wood',
+                        'brick',
+                        'wool',
+                        'wheat',
+                        'ore',
+                      ] as const"
+                      :key="res"
+                      :class="{
+                        selected: buyRes === res,
+                      }"
+                      @click="buyRes = res"
+                    >
+                      {{ resourceEmoji[res] }}
+                    </button>
+                  </div>
+                </div>
+                <button
+                  class="execute-btn"
+                  :disabled="!sellRes || !buyRes"
+                  @click="handleBankTrade"
+                >
+                  EXECUTE TRADE
+                </button>
+              </div>
+
+              <!-- Player Trade UI -->
+              <div v-else class="player-trade-ui">
+                <div class="target-select">
+                  <p>TRADE WITH:</p>
+                  <div class="ai-targets">
+                    <button
+                      v-for="p in players.filter((p) => p.id !== 0)"
+                      :key="p.id"
+                      :class="{
+                        selected: tradeTargetId === p.id,
+                      }"
+                      @click="tradeTargetId = p.id"
+                    >
+                      {{ p.name }}
+                    </button>
+                  </div>
+                </div>
+                <div class="trade-grid">
+                  <div class="trade-col">
+                    <p>YOU OFFER</p>
+                    <div
+                      v-for="res in [
+                        'wood',
+                        'brick',
+                        'wool',
+                        'wheat',
+                        'ore',
+                      ] as const"
+                      :key="res"
+                      class="trade-row"
+                    >
+                      <span>{{ resourceEmoji[res] }}</span>
+                      <button @click="updateTradeValue('offer', res, -1)">
+                        -
+                      </button>
+                      <span class="val">{{ offer[res] || 0 }}</span>
+                      <button @click="updateTradeValue('offer', res, 1)">
+                        +
+                      </button>
+                    </div>
+                  </div>
+                  <div class="trade-col">
+                    <p>THEY GIVE</p>
+                    <div
+                      v-for="res in [
+                        'wood',
+                        'brick',
+                        'wool',
+                        'wheat',
+                        'ore',
+                      ] as const"
+                      :key="res"
+                      class="trade-row"
+                    >
+                      <span>{{ resourceEmoji[res] }}</span>
+                      <button @click="updateTradeValue('request', res, -1)">
+                        -
+                      </button>
+                      <span class="val">{{ request[res] || 0 }}</span>
+                      <button @click="updateTradeValue('request', res, 1)">
+                        +
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  class="execute-btn"
+                  :disabled="tradeTargetId === null"
+                  @click="handlePlayerTrade"
+                >
+                  OFFER TRADE
+                </button>
+              </div>
+
+              <p class="trade-msg" v-if="tradeMessage">
+                {{ tradeMessage }}
+              </p>
+            </template>
+
+            <template v-else>
+              <h3>
+                {{
+                  modalType === "monopoly"
+                    ? "Select resource to MONOPOLIZE"
+                    : "Select 2 resources for YEAR OF PLENTY"
+                }}
+              </h3>
+              <p v-if="modalType === 'year_of_plenty'">
+                Selected:
+                {{ selectedResources.map((r) => resourceEmoji[r]).join(" ") }}
+              </p>
+              <div class="resource-select-grid">
+                <button
+                  v-for="res in [
+                    'wood',
+                    'brick',
+                    'wool',
+                    'wheat',
+                    'ore',
+                  ] as const"
+                  :key="res"
+                  class="res-select-btn"
+                  @click="selectResource(res)"
+                >
+                  <span class="res-icon">{{ resourceEmoji[res] }}</span>
+                  <span class="res-label">{{ res.toUpperCase() }}</span>
+                </button>
+              </div>
+            </template>
+            <button
+              v-if="!showDiscardModal"
+              class="cancel-btn"
+              @click="modalType = null"
+            >
+              CANCEL
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
+  </div>
 </template>
 
 <style scoped lang="scss">
 .catan-game-page {
-    min-height: 100vh;
-    background: #1a1a2e;
-    color: white;
-    padding: 1rem;
-    font-family: "Outfit", sans-serif;
+  min-height: 100vh;
+  background: #1a1a2e;
+  color: white;
+  padding: 1rem;
+  font-family: "Outfit", sans-serif;
 }
 
 .catan-container {
-    max-width: 1400px;
-    margin: 0 auto;
+  max-width: 1400px;
+  margin: 0 auto;
 }
 
 .header {
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1.5rem;
-    padding: 0.8rem 1.5rem;
-    background: rgba(10, 10, 30, 0.8);
-    backdrop-filter: blur(10px);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+  padding: 0.8rem 1.5rem;
+  background: rgba(10, 10, 30, 0.8);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
 }
 
 .header-left {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
 }
 
 .back-btn {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #fff;
-    padding: 0.4rem 1rem;
-    border-radius: 8px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    &:hover {
-        background: rgba(255, 255, 255, 0.1);
-    }
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  padding: 0.4rem 1rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
 }
 
 .turn-mini {
-    display: flex;
-    align-items: center;
-    gap: 0.8rem;
-    background: rgba(255, 255, 255, 0.05);
-    padding: 0.4rem 1rem;
-    border-radius: 50px;
-    .dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-    }
-    .name {
-        font-weight: bold;
-        font-size: 0.9rem;
-        color: #f1c40f;
-        letter-spacing: 1px;
-    }
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.4rem 1rem;
+  border-radius: 50px;
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .name {
+    font-weight: bold;
+    font-size: 0.9rem;
+    color: #f1c40f;
+    letter-spacing: 1px;
+  }
 }
 
 .reset-mini-btn {
-    background: rgba(231, 76, 60, 0.1);
-    border: 1px solid rgba(231, 76, 60, 0.3);
-    color: #e74c3c;
-    padding: 0.4rem 0.8rem;
-    border-radius: 8px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    &:hover {
-        background: rgba(231, 76, 60, 0.2);
-        transform: scale(1.05);
-    }
+  background: rgba(231, 76, 60, 0.1);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  color: #e74c3c;
+  padding: 0.4rem 0.8rem;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  &:hover {
+    background: rgba(231, 76, 60, 0.2);
+    transform: scale(1.05);
+  }
 }
 
 .game-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 1.2rem;
-    background: rgba(255, 255, 255, 0.05);
-    padding: 0.4rem 1.2rem;
-    border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 1.2rem;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.4rem 1.2rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .dice-section {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    padding: 0.2rem 0.6rem;
-    border-radius: 8px;
-    opacity: 0.6;
-    transition: all 0.3s;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 8px;
+  opacity: 0.6;
+  transition: all 0.3s;
 
-    &.can-roll {
-        opacity: 1;
-        cursor: pointer;
-        background: rgba(255, 255, 255, 0.1);
-        &:hover {
-            background: rgba(255, 255, 255, 0.2);
-        }
+  &.can-roll {
+    opacity: 1;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.1);
+    &:hover {
+      background: rgba(255, 255, 255, 0.2);
     }
+  }
 }
 
 .die {
-    width: 28px;
-    height: 28px;
-    background: white;
-    color: #1a1a2e;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: bold;
-    border-radius: 4px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  width: 28px;
+  height: 28px;
+  background: white;
+  color: #1a1a2e;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .dice-total {
-    font-weight: bold;
-    color: #f1c40f;
-    font-size: 1.2rem;
-    min-width: 30px;
-    text-align: center;
+  font-weight: bold;
+  color: #f1c40f;
+  font-size: 1.2rem;
+  min-width: 30px;
+  text-align: center;
 }
 
 .divider {
-    width: 1px;
-    height: 24px;
-    background: rgba(255, 255, 255, 0.1);
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .build-section,
 .action-section {
-    display: flex;
-    gap: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
 }
 
 .toolbar-btn {
-    padding: 0.5rem 1rem;
-    border-radius: 6px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.05);
-    color: white;
-    font-weight: bold;
-    font-size: 0.8rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    white-space: nowrap;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: white;
+  font-weight: bold;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
 
+  &:hover:not(.disabled) {
+    background: rgba(255, 255, 255, 0.15);
+    transform: translateY(-1px);
+  }
+
+  &.active {
+    background: #f1c40f;
+    color: #1a1a2e;
+    border-color: #f1c40f;
+  }
+
+  &.disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  &.roll {
+    background: #f1c40f;
+    color: #1a1a2e;
+    border: none;
+    &:hover {
+      background: #d4ac0d;
+    }
+  }
+
+  &.end {
+    background: #3498db;
+    border: none;
+    &:hover {
+      background: #2980b9;
+    }
+  }
+
+  &.buy-card {
+    background: linear-gradient(135deg, #f5a623, #f8e71c);
+    color: #000;
     &:hover:not(.disabled) {
-        background: rgba(255, 255, 255, 0.15);
-        transform: translateY(-1px);
+      box-shadow: 0 0 15px rgba(245, 166, 35, 0.5);
     }
-
-    &.active {
-        background: #f1c40f;
-        color: #1a1a2e;
-        border-color: #f1c40f;
-    }
-
-    &.disabled {
-        opacity: 0.3;
-        cursor: not-allowed;
-    }
-
-    &.roll {
-        background: #f1c40f;
-        color: #1a1a2e;
-        border: none;
-        &:hover {
-            background: #d4ac0d;
-        }
-    }
-
-    &.end {
-        background: #3498db;
-        border: none;
-        &:hover {
-            background: #2980b9;
-        }
-    }
-
-    &.buy-card {
-        background: linear-gradient(135deg, #f5a623, #f8e71c);
-        color: #000;
-        &:hover:not(.disabled) {
-            box-shadow: 0 0 15px rgba(245, 166, 35, 0.5);
-        }
-    }
+  }
 }
 
 .game-toolbar.robber-mode {
-    background: rgba(231, 76, 60, 0.1);
-    border-color: #e74c3c;
-    .robber-icon {
-        font-size: 1.2rem;
-        margin-right: 0.5rem;
-    }
-    .robber-text {
-        color: #e74c3c;
-        font-weight: bold;
-    }
+  background: rgba(231, 76, 60, 0.1);
+  border-color: #e74c3c;
+  .robber-icon {
+    font-size: 1.2rem;
+    margin-right: 0.5rem;
+  }
+  .robber-text {
+    color: #e74c3c;
+    font-weight: bold;
+  }
 }
 
 .ai-wait-toolbar {
-    color: #888;
-    font-size: 0.8rem;
-    font-style: italic;
-    padding: 0 1rem;
+  color: #888;
+  font-size: 0.8rem;
+  font-style: italic;
+  padding: 0 1rem;
 }
 
 .setup-dash {
-    background: rgba(241, 196, 15, 0.1);
-    border: 1px solid rgba(241, 196, 15, 0.3);
-    padding: 0.4rem 1.5rem;
-    border-radius: 50px;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
+  background: rgba(241, 196, 15, 0.1);
+  border: 1px solid rgba(241, 196, 15, 0.3);
+  padding: 0.4rem 1.5rem;
+  border-radius: 50px;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
 }
 
 .setup-message {
-    display: flex;
-    align-items: center;
-    gap: 0.8rem;
-    .setup-icon {
-        font-size: 1.2rem;
-    }
-    .setup-text {
-        font-weight: bold;
-        color: #f1c40f;
-        font-size: 0.9rem;
-        letter-spacing: 1px;
-    }
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  .setup-icon {
+    font-size: 1.2rem;
+  }
+  .setup-text {
+    font-weight: bold;
+    color: #f1c40f;
+    font-size: 0.9rem;
+    letter-spacing: 1px;
+  }
 }
 
 .game-container {
-    display: grid;
-    grid-template-columns: 1fr 300px;
-    gap: 2rem;
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 2rem;
 }
 
 .board-wrapper {
-    position: relative;
-    background: rgba(255, 255, 255, 0.02);
-    border-radius: 24px;
-    padding: 2rem;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 600px;
+  position: relative;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 24px;
+  padding: 2rem;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 600px;
 }
 
 .build-instruction-overlay {
-    position: absolute;
-    top: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(241, 196, 15, 0.9);
-    color: #1a1a2e;
-    padding: 4px 16px;
-    border-radius: 20px;
-    font-size: 0.8rem;
-    font-weight: bold;
-    z-index: 10;
-    pointer-events: none;
-    &.setup {
-        background: #2ecc71;
-        color: white;
-    }
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(241, 196, 15, 0.9);
+  color: #1a1a2e;
+  padding: 4px 16px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: bold;
+  z-index: 10;
+  pointer-events: none;
+  &.setup {
+    background: #2ecc71;
+    color: white;
+  }
 }
 
 .game-info-side {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .player-card {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 16px;
-    padding: 1rem;
-    transition: all 0.3s;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 1rem;
+  transition: all 0.3s;
 
-    &.active {
-        background: rgba(241, 196, 15, 0.1);
-        border-color: rgba(241, 196, 15, 0.3);
-    }
+  &.active {
+    background: rgba(241, 196, 15, 0.1);
+    border-color: rgba(241, 196, 15, 0.3);
+  }
 }
 
 .player-header {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 0.8rem;
+  .color-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
+  .player-name {
+    font-weight: bold;
+    font-size: 0.9rem;
+    flex-grow: 1;
     display: flex;
     align-items: center;
-    gap: 0.8rem;
-    margin-bottom: 0.8rem;
-    .color-indicator {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
+    gap: 0.4rem;
+    .persona-tag {
+      font-size: 0.7rem;
+      font-weight: normal;
+      color: #888;
     }
-    .player-name {
-        font-weight: bold;
-        font-size: 0.9rem;
-        flex-grow: 1;
-        display: flex;
-        align-items: center;
-        gap: 0.4rem;
-        .persona-tag {
-            font-size: 0.7rem;
-            font-weight: normal;
-            color: #888;
-        }
-    }
-    .award-badges {
-        display: flex;
-        gap: 4px;
-        margin-right: 8px;
-    }
-    .award-badge {
-        font-size: 1rem;
-        filter: drop-shadow(0 0 4px rgba(241, 196, 15, 0.5));
-    }
-    .player-points {
-        font-weight: bold;
-        font-size: 0.8rem;
-        color: #f1c40f;
-    }
+  }
+  .award-badges {
+    display: flex;
+    gap: 4px;
+    margin-right: 8px;
+  }
+  .award-badge {
+    font-size: 1rem;
+    filter: drop-shadow(0 0 4px rgba(241, 196, 15, 0.5));
+  }
+  .player-points {
+    font-weight: bold;
+    font-size: 0.8rem;
+    color: #f1c40f;
+  }
 }
 
 .resources-grid {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 0.4rem;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.4rem;
 }
 
 .resource-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    background: rgba(0, 0, 0, 0.2);
-    padding: 0.4rem 0.2rem;
-    border-radius: 8px;
-    .res-icon {
-        font-size: 1rem;
-        margin-bottom: 2px;
-    }
-    .res-val {
-        font-size: 0.8rem;
-        font-weight: bold;
-    }
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 0.4rem 0.2rem;
+  border-radius: 8px;
+  .res-icon {
+    font-size: 1rem;
+    margin-bottom: 2px;
+  }
+  .res-val {
+    font-size: 0.8rem;
+    font-weight: bold;
+  }
 }
 
 .player-stats-mini {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
 }
 
 .player-points {
-    font-weight: bold;
-    font-size: 0.85rem;
-    color: #f1c40f;
-    background: rgba(241, 196, 15, 0.1);
-    padding: 2px 6px;
-    border-radius: 4px;
+  font-weight: bold;
+  font-size: 0.85rem;
+  color: #f1c40f;
+  background: rgba(241, 196, 15, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
 }
 
 .card-count {
-    font-size: 0.75rem;
-    color: #aaa;
-    display: flex;
-    align-items: center;
-    gap: 4px;
+  font-size: 0.75rem;
+  color: #aaa;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .played-cards-section {
-    margin-top: 0.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px dashed rgba(255, 255, 255, 0.1);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
 }
 
 .played-cards-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .played-card-icon {
-    font-size: 1rem;
-    background: rgba(255, 255, 255, 0.05);
-    padding: 2px;
-    border-radius: 4px;
-    opacity: 0.8;
+  font-size: 1rem;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px;
+  border-radius: 4px;
+  opacity: 0.8;
 }
 
-.costs-reference-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 12px;
-    padding: 0.8rem;
-    margin-top: 1rem;
+.game-container {
+  display: flex;
+  gap: 1.5rem;
+  margin-top: 1rem;
+  height: 85vh; /* Fixed height for the main container */
+}
 
-    h3 {
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        color: #888;
-        margin-bottom: 0.5rem;
-    }
+.board-wrapper {
+  flex: 1;
+  position: relative;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.game-info-side {
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  height: 100%;
+  overflow: hidden;
+}
+
+.player-resources {
+  flex: 0 0 auto;
+  max-height: 480px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 0.8rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+}
+
+.player-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.player-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 0.6rem;
+  transition: all 0.3s;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+
+  &.active {
+    background: rgba(241, 196, 15, 0.08);
+    border-color: rgba(241, 196, 15, 0.4);
+    box-shadow: 0 0 10px rgba(241, 196, 15, 0.1);
+  }
+}
+
+.player-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 0.4rem;
+
+  .color-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .player-name {
+    font-weight: bold;
+    font-size: 0.75rem;
+    flex-grow: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .award-badges {
+    display: flex;
+    gap: 2px;
+  }
+
+  .award-badge {
+    font-size: 0.8rem;
+  }
+
+  .player-points {
+    font-weight: bold;
+    font-size: 0.75rem;
+    color: #f1c40f;
+    background: rgba(241, 196, 15, 0.1);
+    padding: 1px 4px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+}
+
+.resources-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+}
+
+.resource-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 2px;
+  border-radius: 4px;
+
+  .res-icon {
+    font-size: 0.75rem;
+  }
+  .res-val {
+    font-size: 0.7rem;
+    font-weight: bold;
+  }
+}
+
+.opponent-resources-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 4px 8px;
+  border-radius: 6px;
+  margin: 4px 0;
+
+  .res-icon {
+    font-size: 1rem;
+    filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.2));
+  }
+  .res-total-label {
+    font-size: 0.7rem;
+    color: #888;
+    text-transform: uppercase;
+  }
+  .res-val {
+    font-size: 0.85rem;
+    font-weight: bold;
+    color: #eee;
+  }
+}
+
+.player-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.4rem;
+  font-size: 0.65rem;
+}
+
+.card-count {
+  color: #888;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.played-icons-mini {
+  display: flex;
+  gap: 1px;
+}
+
+.mini-card-icon {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+
+.my-hand-mini {
+  margin-top: 0.4rem;
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  padding-top: 3px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.mini-hand-item {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  font-size: 0.7rem;
+  cursor: pointer;
+
+  &.playable {
+    background: #f1c40f;
+    color: #1a1a1a;
+  }
 }
 
 .costs-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .cost-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: #ccc;
+
+  .cost-icons {
+    letter-spacing: -2px;
+  }
+}
+
+.action-log-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  flex: 1; /* Take remaining space */
+  min-height: 0; /* Important for flex child scroll */
+}
+
+.log-filters {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  margin-bottom: 0.8rem;
+  overflow-x: auto;
+  padding-bottom: 4px;
+
+  button {
+    background: rgba(162, 114, 114, 0.05);
+    border: none;
+    border-radius: 4px;
+    color: #888;
+    padding: 2px 8px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    white-space: nowrap;
+
+    &.active {
+      background: #f1c40f;
+      color: #1a1a1a;
+      font-weight: bold;
+    }
+  }
+}
+
+.log-entries {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 4px;
+
+  &::-webkit-scrollbar {
+    width: 4px;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+  }
+}
+
+.log-entry {
+  font-size: 0.75rem;
+  display: flex;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  line-height: 1.4;
+
+  .log-turn {
+    color: #f1c40f;
+    font-weight: bold;
+    min-width: 24px;
+  }
+
+  .log-msg {
+    color: #ccc;
+  }
+
+  &.dice {
+    border-left: 2px solid #e74c3c;
+  }
+  &.build {
+    border-left: 2px solid #2ecc71;
+  }
+  &.trade {
+    border-left: 2px solid #3498db;
+  }
+  &.devCard {
+    border-left: 2px solid #9b59b6;
+  }
+  &.award {
+    border-left: 2px solid #f39c12;
+  }
+}
+
+/* Costs Overlay Styles */
+.costs-overlay {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: rgba(20, 20, 20, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 8px 12px;
+  width: 130px;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 100;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+
+  &.expanded {
+    width: 240px;
+    padding: 15px;
+  }
+
+  .costs-overlay-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+
+    .costs-title {
+      font-weight: bold;
+      font-size: 0.8rem;
+      color: #f1c40f;
+    }
+    .costs-hint {
+      font-size: 0.6rem;
+      color: #666;
+    }
+  }
+
+  .costs-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .cost-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
     font-size: 0.75rem;
-    color: #ccc;
 
-    .cost-icons {
-        letter-spacing: -2px;
+    .cost-label {
+      color: #bbb;
+      white-space: nowrap;
+      display: none;
     }
+    .cost-icons {
+      letter-spacing: 2px;
+    }
+  }
+
+  &.expanded .cost-label {
+    display: block;
+  }
 }
 
 .my-cards-section {
-    margin-top: 1rem;
-    padding-top: 0.8rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
 
-    .cards-header {
-        font-size: 0.7rem;
-        font-weight: 600;
-        color: rgba(255, 255, 255, 0.4);
-        text-transform: uppercase;
-        margin-bottom: 0.5rem;
+  .cards-header {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.4);
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+
+  .cards-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .card-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 0.4rem;
+    min-width: 50px;
+    height: 70px;
+    justify-content: space-between;
+    transition: all 0.2s;
+
+    &.playable {
+      cursor: pointer;
+      &:hover {
+        background: rgba(255, 255, 255, 0.1);
+        transform: translateY(-2px);
+      }
+    }
+    &.played {
+      opacity: 0.5;
+      filter: grayscale(1);
     }
 
-    .cards-list {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.4rem;
+    .card-icon {
+      font-size: 1.5rem;
     }
-
-    .card-item {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 8px;
-        padding: 0.4rem;
-        min-width: 50px;
-        height: 70px;
-        justify-content: space-between;
-        transition: all 0.2s;
-
-        &.playable {
-            cursor: pointer;
-            &:hover {
-                background: rgba(255, 255, 255, 0.1);
-                transform: translateY(-2px);
-            }
-        }
-        &.played {
-            opacity: 0.5;
-            filter: grayscale(1);
-        }
-
-        .card-icon {
-            font-size: 1.5rem;
-        }
-        .card-label {
-            font-size: 0.6rem;
-            font-weight: bold;
-            text-align: center;
-        }
+    .card-label {
+      font-size: 0.6rem;
+      font-weight: bold;
+      text-align: center;
     }
+  }
 }
 
 .discard-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.5rem;
-    margin: 0.5rem 0;
-    max-width: 320px;
-    margin-left: auto;
-    margin-right: auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  max-width: 320px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .discard-item {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.05);
-    padding: 0.3rem;
-    border-radius: 6px;
-    gap: 0.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.3rem;
+  border-radius: 6px;
+  gap: 0.3rem;
 }
 
 .discard-instruction {
-    text-align: center;
-    margin-bottom: 0.2rem;
-    font-size: 0.85rem;
-    color: #ccc;
-    &.highlight {
-        color: #e74c3c;
-        font-weight: bold;
-        font-size: 0.95rem;
-        margin-bottom: 0.4rem;
-    }
+  text-align: center;
+  margin-bottom: 0.2rem;
+  font-size: 0.85rem;
+  color: #ccc;
+  &.highlight {
+    color: #e74c3c;
+    font-weight: bold;
+    font-size: 0.95rem;
+    margin-bottom: 0.4rem;
+  }
 }
 
 .res-icon-mini {
-    font-size: 1.1rem;
+  font-size: 1.1rem;
 }
 
 .val-mini {
-    font-size: 0.9rem;
-    font-weight: bold;
-    min-width: 30px;
-    text-align: center;
+  font-size: 0.9rem;
+  font-weight: bold;
+  min-width: 30px;
+  text-align: center;
 }
 .max-part {
-    font-size: 0.7rem;
-    color: #888;
-    font-weight: normal;
-    margin-left: 2px;
+  font-size: 0.7rem;
+  color: #888;
+  font-weight: normal;
+  margin-left: 2px;
 }
 
 .discard-status {
-    text-align: center;
-    font-weight: bold;
-    margin-top: 0.5rem;
-    font-size: 0.9rem;
-    color: #f1c40f;
+  text-align: center;
+  font-weight: bold;
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  color: #f1c40f;
 }
 
 .execute-btn.warning {
-    background: #e74c3c;
-    border-color: #c0392b;
-    margin-top: 0.5rem;
-    padding: 0.5rem;
-    width: 100%;
-    font-size: 0.85rem;
-    &:hover:not(:disabled) {
-        background: #c0392b;
-        transform: scale(1.02);
-    }
+  background: #e74c3c;
+  border-color: #c0392b;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  width: 100%;
+  font-size: 0.85rem;
+  &:hover:not(:disabled) {
+    background: #c0392b;
+    transform: scale(1.02);
+  }
 }
 
 .adjust-btn-mini {
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
-    font-weight: bold;
-    font-size: 0.8rem;
-    padding: 0;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  font-weight: bold;
+  font-size: 0.8rem;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
 
-    &:hover:not(:disabled) {
-        background: rgba(255, 255, 255, 0.2);
-    }
-    &:disabled {
-        opacity: 0.3;
-        cursor: not-allowed;
-    }
+  &:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.2);
+  }
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
 }
 
 .max-val {
-    font-size: 0.8rem;
-    color: #888;
-    margin-left: 0.5rem;
+  font-size: 0.8rem;
+  color: #888;
+  margin-left: 0.5rem;
 }
 
 .resource-modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.8);
-    backdrop-filter: blur(8px);
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .resource-modal {
-    background: #1e1e30;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 20px;
-    padding: 2rem;
-    max-width: 400px;
-    width: 90%;
-    text-align: center;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  background: #1e1e30;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 2rem;
+  max-width: 400px;
+  width: 90%;
+  text-align: center;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
 
-    h3 {
-        margin-bottom: 1.5rem;
-        font-size: 1.1rem;
-        color: #4a90e2;
+  h3 {
+    margin-bottom: 1.5rem;
+    font-size: 1.1rem;
+    color: #4a90e2;
+  }
+  .resource-select-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .res-select-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    &:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: #4a90e2;
     }
-    .resource-select-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 1rem;
-        margin-bottom: 2rem;
+    .res-icon {
+      font-size: 1.5rem;
+      margin-bottom: 0.3rem;
     }
-    .res-select-btn {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 12px;
-        padding: 0.8rem;
-        cursor: pointer;
-        transition: all 0.2s;
-        &:hover {
-            background: rgba(255, 255, 255, 0.1);
-            border-color: #4a90e2;
-        }
-        .res-icon {
-            font-size: 1.5rem;
-            margin-bottom: 0.3rem;
-        }
-        .res-label {
-            font-size: 0.7rem;
-            font-weight: 700;
-        }
+    .res-label {
+      font-size: 0.7rem;
+      font-weight: 700;
     }
-    .cancel-btn {
-        background: transparent;
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        color: rgba(255, 255, 255, 0.6);
-        padding: 0.6rem 2rem;
-        border-radius: 10px;
-        cursor: pointer;
-    }
+  }
+  .cancel-btn {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.6);
+    padding: 0.6rem 2rem;
+    border-radius: 10px;
+    cursor: pointer;
+  }
 }
 
 .trade-modal {
-    max-width: 600px;
-    .trade-tabs {
-        display: flex;
-        gap: 1rem;
-        margin-bottom: 2rem;
-        justify-content: center;
-        button {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            color: #888;
-            padding: 0.5rem 2rem;
-            border-radius: 8px;
-            cursor: pointer;
-            &.active {
-                background: #4a90e2;
-                color: white;
-                border-color: #4a90e2;
-            }
-        }
+  max-width: 600px;
+  .trade-tabs {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    justify-content: center;
+    button {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #888;
+      padding: 0.5rem 2rem;
+      border-radius: 8px;
+      cursor: pointer;
+      &.active {
+        background: #4a90e2;
+        color: white;
+        border-color: #4a90e2;
+      }
     }
+  }
 
-    .bank-trade-ui,
-    .player-trade-ui {
-        background: rgba(0, 0, 0, 0.2);
-        padding: 1.5rem;
-        border-radius: 16px;
-        margin-bottom: 2rem;
+  .bank-trade-ui,
+  .player-trade-ui {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 1.5rem;
+    border-radius: 16px;
+    margin-bottom: 2rem;
+  }
+
+  .trade-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    p {
+      font-size: 0.8rem;
+      font-weight: bold;
+      color: #888;
     }
+  }
 
-    .trade-section {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 0.5rem;
-        p {
-            font-size: 0.8rem;
-            font-weight: bold;
-            color: #888;
-        }
+  .resource-select-mini {
+    display: flex;
+    gap: 0.5rem;
+    button {
+      font-size: 1.5rem;
+      padding: 0.5rem;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      cursor: pointer;
+      transition: all 0.2s;
+      &.selected {
+        border-color: #f1c40f;
+        background: rgba(241, 196, 15, 0.1);
+      }
+      &.disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
     }
+  }
 
-    .resource-select-mini {
-        display: flex;
-        gap: 0.5rem;
-        button {
-            font-size: 1.5rem;
-            padding: 0.5rem;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            background: rgba(255, 255, 255, 0.05);
-            cursor: pointer;
-            transition: all 0.2s;
-            &.selected {
-                border-color: #f1c40f;
-                background: rgba(241, 196, 15, 0.1);
-            }
-            &.disabled {
-                opacity: 0.3;
-                cursor: not-allowed;
-            }
-        }
+  .trade-arrow {
+    font-size: 1.5rem;
+    margin: 1rem 0;
+    color: #888;
+  }
+
+  .execute-btn {
+    margin-top: 1.5rem;
+    width: 100%;
+    padding: 1rem;
+    border-radius: 12px;
+    border: none;
+    background: #f1c40f;
+    color: #1a1a2e;
+    font-weight: bold;
+    font-size: 1rem;
+    cursor: pointer;
+    &:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
     }
+  }
 
-    .trade-arrow {
-        font-size: 1.5rem;
-        margin: 1rem 0;
+  .ai-targets {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+    margin-top: 0.5rem;
+    button {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: white;
+      padding: 0.4rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      &.selected {
+        border-color: #2ecc71;
+        background: rgba(46, 204, 113, 0.1);
+      }
+    }
+  }
+
+  .trade-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
+    margin-top: 1.5rem;
+    .trade-col {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      p {
+        font-size: 0.7rem;
+        font-weight: bold;
         color: #888;
+        margin-bottom: 0.5rem;
+      }
     }
-
-    .execute-btn {
-        margin-top: 1.5rem;
-        width: 100%;
-        padding: 1rem;
-        border-radius: 12px;
-        border: none;
-        background: #f1c40f;
-        color: #1a1a2e;
+    .trade-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(0, 0, 0, 0.2);
+      padding: 0.3rem 0.6rem;
+      border-radius: 6px;
+      .val {
+        flex-grow: 1;
         font-weight: bold;
-        font-size: 1rem;
+        font-size: 0.9rem;
+      }
+      button {
+        width: 24px;
+        height: 24px;
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.05);
+        color: white;
         cursor: pointer;
-        &:disabled {
-            opacity: 0.3;
-            cursor: not-allowed;
-        }
+      }
     }
+  }
 
-    .ai-targets {
-        display: flex;
-        gap: 0.5rem;
-        justify-content: center;
-        margin-top: 0.5rem;
-        button {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            color: white;
-            padding: 0.4rem 1rem;
-            border-radius: 6px;
-            cursor: pointer;
-            &.selected {
-                border-color: #2ecc71;
-                background: rgba(46, 204, 113, 0.1);
-            }
-        }
-    }
-
-    .trade-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 2rem;
-        margin-top: 1.5rem;
-        .trade-col {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-            p {
-                font-size: 0.7rem;
-                font-weight: bold;
-                color: #888;
-                margin-bottom: 0.5rem;
-            }
-        }
-        .trade-row {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            background: rgba(0, 0, 0, 0.2);
-            padding: 0.3rem 0.6rem;
-            border-radius: 6px;
-            .val {
-                flex-grow: 1;
-                font-weight: bold;
-                font-size: 0.9rem;
-            }
-            button {
-                width: 24px;
-                height: 24px;
-                border-radius: 4px;
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                background: rgba(255, 255, 255, 0.05);
-                color: white;
-                cursor: pointer;
-            }
-        }
-    }
-
-    .trade-msg {
-        margin-top: 1rem;
-        font-weight: bold;
-        color: #f1c40f;
-    }
+  .trade-msg {
+    margin-top: 1rem;
+    font-weight: bold;
+    color: #f1c40f;
+  }
 }
 
 .setup-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(10, 10, 30, 0.9);
-    backdrop-filter: blur(10px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 30, 0.9);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
 }
 
 .setup-card {
-    background: #1a1a2e;
-    padding: 3rem;
-    border-radius: 24px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    text-align: center;
+  background: #1a1a2e;
+  padding: 3rem;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  text-align: center;
 }
 
 .setup-title {
-    font-size: 3rem;
-    margin-bottom: 0.5rem;
-    color: #f1c40f;
-    letter-spacing: 4px;
+  font-size: 3rem;
+  margin-bottom: 0.5rem;
+  color: #f1c40f;
+  letter-spacing: 4px;
 }
 .setup-subtitle {
-    color: #888;
-    margin-bottom: 2rem;
+  color: #888;
+  margin-bottom: 2rem;
 }
 
 .setup-options {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
 }
 
 .setup-btn {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 1rem 2rem;
-    border-radius: 12px;
-    color: white;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    cursor: pointer;
-    transition: all 0.3s;
-    &:hover {
-        background: rgba(255, 255, 255, 0.1);
-        border-color: #f1c40f;
-    }
-    &.highlight {
-        border-color: #f1c40f;
-        background: rgba(241, 196, 15, 0.05);
-    }
-    .btn-main {
-        font-weight: bold;
-        font-size: 1.2rem;
-    }
-    .btn-sub {
-        font-size: 0.8rem;
-        color: #888;
-    }
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 1rem 2rem;
+  border-radius: 12px;
+  color: white;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  transition: all 0.3s;
+  &:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: #f1c40f;
+  }
+  &.highlight {
+    border-color: #f1c40f;
+    background: rgba(241, 196, 15, 0.05);
+  }
+  .btn-main {
+    font-weight: bold;
+    font-size: 1.2rem;
+  }
+  .btn-sub {
+    font-size: 0.8rem;
+    color: #888;
+  }
 }
 </style>
