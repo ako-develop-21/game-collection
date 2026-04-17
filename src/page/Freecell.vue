@@ -38,7 +38,7 @@ const formatTime = (seconds: number) => {
 };
 
 const goHome = () => {
-    router.push("/");
+    router.push("/game-collection");
 };
 
 const statusMessage = computed(() => {

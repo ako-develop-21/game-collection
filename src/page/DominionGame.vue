@@ -301,7 +301,7 @@ const handleSupplyClick = (id: string) => {
               <span class="btn-main">START GAME</span>
               <span class="btn-sub">vs AI ({{ aiCount }}名)</span>
             </button>
-            <button class="back-btn-large" @click="router.push('/')">BACK TO HOME</button>
+            <button class="back-btn-large" @click="router.push('/game-collection')">BACK TO HOME</button>
           </div>
         </div>
       </div>
@@ -342,7 +342,7 @@ const handleSupplyClick = (id: string) => {
       <div class="game-content" v-else-if="!showSetup">
         <div class="header">
           <div class="header-left">
-            <button class="back-link" @click="router.push('/')">← BACK</button>
+            <button class="back-link" @click="router.push('/game-collection')">← BACK</button>
             <div class="game-info">
               Turn {{ turnCount }} - {{ currentPlayer.name }}'s Turn ({{ phase }} Phase)
               <span v-if="currentPlayer.name.startsWith('AI')" class="ai-thinking">Thinking...</span>

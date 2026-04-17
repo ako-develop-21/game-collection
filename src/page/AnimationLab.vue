@@ -7,7 +7,7 @@ const router = useRouter();
 <template>
     <div class="lab-container">
         <div class="lab-header">
-            <button class="back-btn" @click="router.push('/')">
+            <button class="back-btn" @click="router.push('/game-collection')">
                 ← BACK TO HOME
             </button>
             <h1 class="lab-title">ANIMATION LABORATORY</h1>

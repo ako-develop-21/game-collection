@@ -122,7 +122,7 @@ const bestScoreText = computed(() => {
 const difficultyOptions: Difficulty[] = ["Easy", "Normal", "Hard"];
 
 const goHome = () => {
-    router.push("/");
+    router.push("/game-collection");
 };
 </script>
 

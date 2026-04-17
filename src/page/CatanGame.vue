@@ -665,7 +665,10 @@ watch(activeTradeRequest, (newReq, oldReq) => {
                                 >Play again with same players</span
                             >
                         </button>
-                        <button class="setup-btn" @click="router.push('/')">
+                        <button
+                            class="setup-btn"
+                            @click="router.push('/game-collection')"
+                        >
                             <span class="btn-main">BACK TO HOME</span>
                         </button>
                     </div>
@@ -675,7 +678,10 @@ watch(activeTradeRequest, (newReq, oldReq) => {
             <div v-else-if="gameStarted" class="game-content">
                 <div class="header">
                     <div class="header-left">
-                        <button class="back-btn" @click="router.push('/')">
+                        <button
+                            class="back-btn"
+                            @click="router.push('/game-collection')"
+                        >
                             ← BACK
                         </button>
                         <div class="turn-mini">

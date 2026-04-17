@@ -30,7 +30,7 @@ onUnmounted(() => {
 });
 
 const goHome = () => {
-    router.push("/");
+    router.push("/game-collection");
 };
 </script>
 

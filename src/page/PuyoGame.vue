@@ -65,7 +65,9 @@ onUnmounted(() => {
 <template>
     <div class="puyo-game-page">
         <div class="header">
-            <button class="back-btn" @click="router.push('/')">← BACK</button>
+            <button class="back-btn" @click="router.push('/game-collection')">
+                ← BACK
+            </button>
             <h1 class="title">PUYO PUYO</h1>
             <div class="score-container">
                 <div class="label">SCORE</div>
