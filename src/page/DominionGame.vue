@@ -183,7 +183,13 @@ const startGame = () => {
 
 const setDefaultCardSelectionState = () => {
   cardSelectionState.value = {}
+  const commonIds = Object.keys(COMMON_CARDS)
   Object.keys(ALL_CARDS).forEach(cardId => {
+    // Basic cards should not be candidates for kingdom cards
+    if (commonIds.includes(cardId)) {
+      cardSelectionState.value[cardId] = 'exclude'
+      return
+    }
     cardSelectionState.value[cardId] = deletedCards.includes(cardId) ? 'exclude' : 'candidate'
   })
 }
